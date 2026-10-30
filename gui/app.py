@@ -147,6 +147,7 @@ class App(tk.Tk):
         self.config_mgr = ConfigManager()
         self.items = []
         self._photos = []
+        self._pet = None          # 桌面悬浮宠物窗口（None = 未召唤）
 
         self._build_toolbar()
         self._build_grid_area()
@@ -168,6 +169,36 @@ class App(tk.Tk):
                       relief="flat", bg="#ffffff", padx=12, pady=4,
                       activebackground="#e5e5ea",
                       command=cmd).pack(side="left", padx=4)
+        self._pet_btn = tk.Button(bar, text="🐙 桌面宠物",
+                                  font=("Microsoft YaHei", 10),
+                                  relief="flat", bg="#ffffff", padx=12, pady=4,
+                                  activebackground="#e5e5ea",
+                                  command=self._toggle_pet)
+        self._pet_btn.pack(side="left", padx=4)
+
+    # ---------- 桌面悬浮宠物 ----------
+    def _toggle_pet(self):
+        """召唤 / 收起桌面上独立悬浮的墨墨（真透明 + 鼠标穿透 + 上下浮动）。"""
+        if getattr(self, "_pet", None) is not None:
+            try:
+                self._pet.on_close()
+            except Exception:
+                pass
+            return
+        from gui.pet import DesktopPet
+        self._pet = DesktopPet(self)
+        self._pet_btn.config(text="🐙 收起宠物")
+        # 窗内那只墨墨让位，避免同时出现两只
+        if getattr(self, "_mascot", None) is not None:
+            self._mascot.place_forget()
+
+    def _on_pet_closed(self):
+        """桌宠被收起时（右键菜单 / 按钮）回调。"""
+        self._pet = None
+        self._pet_btn.config(text="🐙 桌面宠物")
+        if getattr(self, "_mascot", None) is not None:
+            self._mascot.place(relx=1.0, rely=1.0, x=-26, y=-22, anchor="se")
+            self._mascot.lift()
 
     def _build_grid_area(self):
         container = tk.Frame(self, bg="#eef1f6")
