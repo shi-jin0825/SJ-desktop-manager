@@ -71,13 +71,39 @@ def short_name(name: str, limit: int = 12) -> str:
     return name if len(name) <= limit else name[:limit - 1] + "…"
 
 
+def center_window(win, w: int, h: int, parent=None) -> None:
+    """把窗口放到父窗口（没有父窗口则屏幕）正中央，并保证不超出屏幕。
+
+    不指定位置的 Toplevel 默认由窗口管理器随便安排，通常就出现在左上角。
+    """
+    win.update_idletasks()
+    if parent is not None and parent.winfo_ismapped():
+        px, py = parent.winfo_rootx(), parent.winfo_rooty()
+        pw, ph = parent.winfo_width(), parent.winfo_height()
+    else:
+        px, py = 0, 0
+        pw, ph = win.winfo_screenwidth(), win.winfo_screenheight()
+    x = px + (pw - w) // 2
+    y = py + (ph - h) // 2
+    sw, sh = win.winfo_screenwidth(), win.winfo_screenheight()
+    x = max(0, min(x, sw - w))
+    y = max(0, min(y, sh - h))
+    win.geometry(f"{w}x{h}+{x}+{y}")
+    # Tk 的 geometry 定位的是客户区，外框（边框+标题栏）会再偏出去一点；
+    # 读回真实位置做一次补偿，保证整个窗口（含边框）视觉上居中。
+    win.update_idletasks()
+    dx, dy = win.winfo_rootx() - x, win.winfo_rooty() - y
+    if dx or dy:
+        win.geometry(f"{w}x{h}+{max(0, x - dx)}+{max(0, y - dy)}")
+
+
 class CategoryWindow(tk.Toplevel):
     """某个分类文件夹的内容窗口。"""
 
     def __init__(self, master, category, items, config, on_change):
         super().__init__(master)
         self.title(f"📁 {category}")
-        self.geometry("560x400")
+        center_window(self, 560, 400, master)
         self.configure(bg="#f2f2f7")
         self.category = category
         self.cfg = config
@@ -131,7 +157,6 @@ class App(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title("墨墨桌面管理助手")
-        self.geometry("1000x640")
         self.configure(bg="#eef1f6")
         self.config_mgr = ConfigManager()
         self.items = []
@@ -142,6 +167,7 @@ class App(tk.Tk):
         self._build_grid_area()
         self.refresh()
         self.bind("<F5>", lambda e: self.refresh())
+        center_window(self, 1000, 640)   # 主窗口在屏幕居中
 
     # ---------- 界面搭建 ----------
     def _build_toolbar(self):
@@ -344,7 +370,7 @@ class App(tk.Tk):
         win = tk.Toplevel(self)
         win.title("管理分类")
         win.transient(self)
-        win.geometry("330x380")
+        center_window(win, 330, 380, self)
         win.configure(bg="#f4f6fa")
         win.resizable(False, False)
         win.grab_set()          # 模态（不阻塞主循环，桌宠动画照常）
