@@ -150,7 +150,7 @@ class App(tk.Tk):
         for text, cmd in [
             ("🔄 刷新 (F5)", self.refresh),
             ("📂 新建分类", self._add_category),
-            ("🗑 管理分类", self._manage_categories),
+            ("🗂 管理分类", self._manage_categories),
             ("🖥 打开桌面", self._open_desktop),
         ]:
             tk.Button(bar, text=text, font=("Microsoft YaHei", 10),
@@ -336,9 +336,104 @@ class App(tk.Tk):
             self.refresh()
 
     def _manage_categories(self):
-        cats = "\n".join(f"  • {c}" for c in self.config_mgr.categories) or "  （无）"
-        if messagebox.askyesno("管理分类", f"当前分类：\n{cats}\n\n是否新建分类？"):
-            self._add_category()
+        """分类管理器：列出全部分类（含项目数），可新建 / 重命名 / 删除。
+
+        这里做真正的管理操作（新建只是其中一项），与工具栏的
+        「新建分类」快捷入口不重复。
+        """
+        win = tk.Toplevel(self)
+        win.title("管理分类")
+        win.transient(self)
+        win.geometry("330x380")
+        win.configure(bg="#f4f6fa")
+        win.resizable(False, False)
+        win.grab_set()          # 模态（不阻塞主循环，桌宠动画照常）
+
+        top = tk.Frame(win, bg="#f4f6fa")
+        top.pack(fill="both", expand=True, padx=12, pady=(12, 0))
+        tk.Label(top, text="分类列表（括号内为项目数）",
+                 font=("Microsoft YaHei", 10), bg="#f4f6fa",
+                 anchor="w").pack(fill="x")
+
+        body = tk.Frame(top, bg="#f4f6fa")
+        body.pack(fill="both", expand=True, pady=6)
+        scroll = tk.Scrollbar(body)
+        scroll.pack(side="right", fill="y")
+        lst = tk.Listbox(body, font=("Microsoft YaHei", 10), relief="solid",
+                         bd=1, activestyle="none", height=10,
+                         yscrollcommand=scroll.set)
+        lst.pack(side="left", fill="both", expand=True)
+        scroll.config(command=lst.yview)
+
+        def count_of(cat):
+            return sum(1 for v in self.config_mgr.data["assignments"].values()
+                       if v == cat)
+
+        def reload(keep=None):
+            lst.delete(0, "end")
+            for c in self.config_mgr.categories:
+                lst.insert("end", f"{c}  ({count_of(c)})")
+            if keep is not None and keep < lst.size():
+                lst.selection_set(keep)
+                lst.see(keep)
+
+        def selected():
+            sel = lst.curselection()
+            return self.config_mgr.categories[sel[0]] if sel else None
+
+        def do_add():
+            name = simpledialog.askstring("新建分类", "分类名称：", parent=win)
+            if name is None:
+                return
+            name = name.strip()
+            if not self.config_mgr.add_category(name):
+                messagebox.showwarning("提示", "分类名称为空或已存在", parent=win)
+                return
+            reload(self.config_mgr.categories.index(name))
+            self.refresh()
+
+        def do_rename():
+            old = selected()
+            if old is None:
+                messagebox.showinfo("提示", "请先选择一个分类", parent=win)
+                return
+            new = simpledialog.askstring("重命名分类", "新的分类名称：",
+                                         initialvalue=old, parent=win)
+            if new is None:
+                return
+            if not self.config_mgr.rename_category(old, new):
+                if (new or "").strip() != old:
+                    messagebox.showwarning("提示", "分类名称为空或已存在", parent=win)
+                return
+            reload(self.config_mgr.categories.index(new.strip()))
+            self.refresh()
+
+        def do_delete():
+            cat = selected()
+            if cat is None:
+                messagebox.showinfo("提示", "请先选择一个分类", parent=win)
+                return
+            if messagebox.askyesno(
+                    "删除分类",
+                    f"删除分类「{cat}」？\n其中的项目将回到未分类状态。", parent=win):
+                self.config_mgr.remove_category(cat)
+                reload()
+                self.refresh()
+
+        bar = tk.Frame(win, bg="#f4f6fa")
+        bar.pack(fill="x", padx=12, pady=8)
+        for text, cmd in (("➕ 新建", do_add), ("✏️ 重命名", do_rename),
+                          ("🗑 删除", do_delete)):
+            tk.Button(bar, text=text, font=("Microsoft YaHei", 9),
+                      relief="flat", bg="#ffffff", activebackground="#e5e5ea",
+                      padx=8, pady=4, command=cmd).pack(side="left", padx=3)
+        tk.Button(bar, text="关闭", font=("Microsoft YaHei", 9), relief="flat",
+                  bg="#ffffff", activebackground="#e5e5ea", padx=10, pady=4,
+                  command=win.destroy).pack(side="right")
+
+        lst.bind("<Double-Button-1>", lambda e: do_rename())
+        reload()
+        win.protocol("WM_DELETE_WINDOW", win.destroy)
 
     def _open_desktop(self):
         from core.scanner import get_desktop_paths

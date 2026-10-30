@@ -48,6 +48,20 @@ class ConfigManager:
         self.save()
         return True
 
+    def rename_category(self, old: str, new: str) -> bool:
+        """重命名分类，同时更新已归属的项目；失败返回 False。"""
+        new = (new or "").strip()
+        if not new or new == old or new in self.categories:
+            return False
+        if old not in self.categories:
+            return False
+        self.categories[self.categories.index(old)] = new
+        for key, val in self.data["assignments"].items():
+            if val == old:
+                self.data["assignments"][key] = new
+        self.save()
+        return True
+
     def remove_category(self, name: str):
         if name in self.categories:
             self.categories.remove(name)
