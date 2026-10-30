@@ -1,14 +1,15 @@
 # -*- coding: utf-8 -*-
-"""创建/更新「八爪智理」的桌面快捷方式（含专属图标，目标 pythonw 无黑框）。
+"""创建/更新「墨墨桌面管理助手」的桌面快捷方式（含专属图标，目标 pythonw 无黑框）。
 
 用法：
     D:\\Python313\\python.exe tools\\make_shortcut.py
 
 说明：
-    - 若桌面已存在同名/旧名快捷方式，则原地更新（不产生重复快捷方式），
-      且会自动把旧名重命名为新名；
-    - 优先名字：八爪智理.lnk；兼容旧名：SJ 桌面管理器.lnk、run.bat - 快捷方式.lnk；
-    - 图标用 assets/app-grid.ico（tools/make_icon.py 生成）。
+    - 若桌面已存在同名/旧名快捷方式，则原地更新并自动重命名为新名
+      （不产生重复快捷方式）；
+    - 优先名字：墨墨桌面管理助手.lnk；兼容旧名：八爪智理.lnk、
+      SJ 桌面管理器.lnk、run.bat - 快捷方式.lnk；
+    - 图标用 assets/momo.ico（tools/mascot_to_ico.py 从吉祥物图生成）。
 """
 import ctypes
 import os
@@ -20,11 +21,11 @@ sys.path.insert(0, PROJ)
 
 PYTHONW = r"D:\Python313\pythonw.exe"
 MAIN_PY = os.path.join(PROJ, "main.py")
-ICON = os.path.join(PROJ, "assets", "app-grid.ico")
+ICON = os.path.join(PROJ, "assets", "momo.ico")
 
-APP_NAME = "八爪智理"
+APP_NAME = "墨墨桌面管理助手"
 GOOD_NAME = APP_NAME + ".lnk"
-OLD_NAMES = ("SJ 桌面管理器.lnk", "run.bat - 快捷方式.lnk", "run.bat.lnk")
+OLD_NAMES = ("八爪智理.lnk", "SJ 桌面管理器.lnk", "run.bat - 快捷方式.lnk", "run.bat.lnk")
 
 CLSID_ShellLink = (0x00021401, 0x0000, 0x0000, 0xC0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46)
 IID_IShellLinkW = (0x000214F9, 0x0000, 0x0000, 0xC0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46)

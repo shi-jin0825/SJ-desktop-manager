@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""八爪智理（SJ-desktop-manager）—— 启动入口。
+"""墨墨桌面管理助手（SJ-desktop-manager）—— 启动入口。
 
 运行方式：python main.py
 依赖：仅使用 Python 标准库（tkinter），无需 pip install。

@@ -1,4 +1,4 @@
-# 八爪智理（SJ-desktop-manager）
+# 墨墨桌面管理助手（SJ-desktop-manager）
 
 一款用 Python（tkinter）编写的 Windows 桌面管理器，把桌面变成"手机桌面"：
 扫描桌面上的文件、文件夹和快捷方式，按你自定义的分类归入"文件夹"，清晰一目了然。
@@ -33,13 +33,18 @@ python main.py
 
 ## 专属图标与快捷方式
 
-`assets/app-grid.ico` 是用 `tools/make_icon.py` 纯 Python 合成的应用图标
-（蓝色圆角底 + 3×3 真实应用图标，内嵌 256/64/48/32/16 五个尺寸）。
-`tools/make_shortcut.py` 可以一键在桌面创建指向本程序的快捷方式并应用该图标
-（通过 ctypes 直接调用 `IShellLinkW` + `IPersistFile` COM 接口，同样零依赖）：
+当前应用图标 `assets/momo.ico` 来自吉祥物「墨墨」（墨绿色小章鱼，见 `assets/mascot.png`），
+由 `tools/mascot_to_ico.py` 生成（自动裁边去水印、四角圆角透明，内嵌 256/64/48/32/16
+五个尺寸，纯 Python 标准库实现）。另保留备选图标 `assets/app-grid.ico`
+（`tools/make_icon.py` 合成的蓝色圆角底 + 3×3 真实应用图标样式）。
+
+`tools/make_shortcut.py` 可以一键在桌面创建指向本程序的快捷方式并应用图标
+（通过 ctypes 直接调用 `IShellLinkW` + `IPersistFile` COM 接口，同样零依赖），
+旧名快捷方式会被自动重命名：
 
 ```bash
-python tools/make_icon.py       # 重新生成 assets/*.ico
+python tools/mascot_to_ico.py   # 从吉祥物图生成 assets/momo.ico
+python tools/make_icon.py       # 重新生成备选图标 assets/app-grid.ico
 python tools/make_shortcut.py   # 在桌面创建/更新快捷方式
 ```
 
@@ -56,13 +61,20 @@ SJ-desktop-manager/
 ├── gui/
 │   └── app.py             # 手机桌面式 GUI（tkinter）
 ├── tools/
-│   ├── make_icon.py       # 合成应用 .ico 图标
+│   ├── make_icon.py       # 合成备选 .ico 图标（3×3 应用网格样式）
+│   ├── mascot_to_ico.py   # 吉祥物图 -> 应用 .ico
 │   └── make_shortcut.py   # 创建/更新桌面快捷方式
-├── assets/                # 生成的 .ico 与截图
+├── assets/                # 图标、吉祥物图与截图
 └── config.json            # 首次运行自动生成
 ```
 
 ## 更新日志
+
+### v0.3 — 品牌焕新
+
+- **应用图标**：墨绿色小章鱼吉祥物「墨墨」成为官方图标（多尺寸 `.ico`，
+  自动去水印、圆角透明处理）
+- **更名**：软件正式定名「墨墨桌面管理助手」
 
 ### v0.2 — 界面与体验优化
 
