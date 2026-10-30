@@ -41,6 +41,8 @@ MARGIN_BOTTOM = 110          # 初始位置：距屏幕底边（留任务栏）
 
 KEY_COLOR = "#ff00ff"        # 透明色（品红）；图片里若有同色像素会被挖空
 
+HAPPY_MS = 900               # ★点击后眯眼笑形态保持的毫秒数，之后变回睁眼
+
 # ==========================================================================
 #  Win32
 # ==========================================================================
@@ -252,9 +254,10 @@ def build_photo(master, rgba, size, key_rgb=(255, 0, 255)):
 
 
 def default_image_path() -> str:
-    """默认用项目 assets 里的墨墨立绘。"""
-    return os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                        "assets", "mascot-stand.png")
+    """默认用项目 assets 里的墨墨立绘（睁眼形态）。"""
+    base = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                        "assets")
+    return os.path.join(base, "momo-open.png")
 
 
 def load_pet(master, path, size):
@@ -264,6 +267,17 @@ def load_pet(master, path, size):
         scaled = resize_rgba(srgba, sw, sh, size)
         defringe(scaled, size)
         return build_photo(master, scaled, size)
+    return None
+
+
+def load_pet_fallback(master, size):
+    """按优先级尝试素材表，全失败返回 None（由调用方画兜底章鱼）。"""
+    base = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                        "assets")
+    for name in ("momo-open.png", "mascot-stand.png"):
+        photo = load_pet(master, os.path.join(base, name), size)
+        if photo is not None:
+            return photo
     return None
 
 
@@ -284,11 +298,15 @@ class DesktopPet(tk.Toplevel):
         self.attributes("-transparentcolor", KEY_COLOR)
         self.attributes("-topmost", True)       # 置顶
 
-        # ---- 图片 ----
-        path = image_path or default_image_path()
-        self._photo = load_pet(self, path, PET_SIZE)
+        # ---- 图片（睁眼默认形态 + 点击时的眯眼笑形态）----
+        base = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                            "assets")
+        self._photo = load_pet(self, image_path or default_image_path(), PET_SIZE) \
+            or load_pet_fallback(self, PET_SIZE)
         if self._photo is None:                 # 图片缺失时画一只兜底章鱼
             self._photo = self._fallback_photo()
+        happy_path = os.path.join(base, "momo-happy.png")
+        self._photo_happy = load_pet(self, happy_path, PET_SIZE) or self._photo
         self._label = tk.Label(self, image=self._photo, bg=KEY_COLOR,
                                bd=0, highlightthickness=0, cursor="fleur")
         self._label.pack()
@@ -358,7 +376,29 @@ class DesktopPet(tk.Toplevel):
             self.geometry(f"+{self._base_x}+{self._base_y}")
 
     def _on_release(self, e):
-        self._dragging = None
+        if self._dragging:
+            gx, gy = self._dragging[0], self._dragging[1]
+            moved = abs(e.x_root - gx) + abs(e.y_root - gy)
+            self._dragging = None
+            if moved < 6:               # 没怎么动 = 单击 → 开心一下
+                self.show_happy()
+
+    # ---------- 表情 ----------
+    def show_happy(self):
+        """单击墨墨：眯眼笑一会儿，再变回睁眼。"""
+        if self._photo_happy is self._photo:
+            return
+        self._label.config(image=self._photo_happy)
+        if getattr(self, "_happy_job", None):
+            self.after_cancel(self._happy_job)
+        self._happy_job = self.after(HAPPY_MS, self._back_to_open)
+
+    def _back_to_open(self):
+        self._happy_job = None
+        try:
+            self._label.config(image=self._photo)
+        except tk.TclError:
+            pass                        # 窗口已销毁
 
     # ---------- 右键菜单 ----------
     def _build_menu(self):
