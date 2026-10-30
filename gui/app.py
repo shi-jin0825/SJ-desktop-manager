@@ -130,7 +130,7 @@ class App(tk.Tk):
 
     def __init__(self):
         super().__init__()
-        self.title("SJ 桌面管理器")
+        self.title("八爪智理")
         self.geometry("1000x640")
         self.configure(bg="#eef1f6")
         self.config_mgr = ConfigManager()

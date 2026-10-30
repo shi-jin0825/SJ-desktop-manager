@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""SJ 桌面管理器 —— 启动入口。
+"""八爪智理（SJ-desktop-manager）—— 启动入口。
 
 运行方式：python main.py
 依赖：仅使用 Python 标准库（tkinter），无需 pip install。

@@ -1,4 +1,4 @@
-# SJ-desktop-manager
+# 八爪智理（SJ-desktop-manager）
 
 一款用 Python（tkinter）编写的 Windows 桌面管理器，把桌面变成"手机桌面"：
 扫描桌面上的文件、文件夹和快捷方式，按你自定义的分类归入"文件夹"，清晰一目了然。

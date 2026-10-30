@@ -1,12 +1,13 @@
 # -*- coding: utf-8 -*-
-"""创建/更新 SJ 桌面管理器的桌面快捷方式（含专属图标，目标 pythonw 无黑框）。
+"""创建/更新「八爪智理」的桌面快捷方式（含专属图标，目标 pythonw 无黑框）。
 
 用法：
     D:\\Python313\\python.exe tools\\make_shortcut.py
 
 说明：
-    - 若桌面已存在同名/旧名快捷方式，则原地更新（不产生重复快捷方式）；
-    - 优先名字：SJ 桌面管理器.lnk；兼容旧名：run.bat - 快捷方式.lnk；
+    - 若桌面已存在同名/旧名快捷方式，则原地更新（不产生重复快捷方式），
+      且会自动把旧名重命名为新名；
+    - 优先名字：八爪智理.lnk；兼容旧名：SJ 桌面管理器.lnk、run.bat - 快捷方式.lnk；
     - 图标用 assets/app-grid.ico（tools/make_icon.py 生成）。
 """
 import ctypes
@@ -21,8 +22,9 @@ PYTHONW = r"D:\Python313\pythonw.exe"
 MAIN_PY = os.path.join(PROJ, "main.py")
 ICON = os.path.join(PROJ, "assets", "app-grid.ico")
 
-GOOD_NAME = "SJ 桌面管理器.lnk"
-OLD_NAMES = ("run.bat - 快捷方式.lnk", "run.bat.lnk")
+APP_NAME = "八爪智理"
+GOOD_NAME = APP_NAME + ".lnk"
+OLD_NAMES = ("SJ 桌面管理器.lnk", "run.bat - 快捷方式.lnk", "run.bat.lnk")
 
 CLSID_ShellLink = (0x00021401, 0x0000, 0x0000, 0xC0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46)
 IID_IShellLinkW = (0x000214F9, 0x0000, 0x0000, 0xC0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46)
@@ -168,7 +170,18 @@ def main():
 
     print(f"写入快捷方式：{lnk}")
     update_shortcut(lnk, target=PYTHONW, arguments=f'"{MAIN_PY}"',
-                    workdir=PROJ, icon=ICON, description="SJ 桌面管理器")
+                    workdir=PROJ, icon=ICON, description=APP_NAME)
+
+    # 若是旧名则重命名为新名
+    new_lnk = os.path.join(desktop, GOOD_NAME)
+    if os.path.abspath(lnk) != os.path.abspath(new_lnk):
+        if os.path.isfile(new_lnk):      # 新名已存在，避免覆盖
+            os.remove(lnk)
+        else:
+            os.rename(lnk, new_lnk)
+            print(f"已重命名为：{GOOD_NAME}")
+        lnk = new_lnk
+
     refresh_shell()
     print("完成。若桌面图标仍是旧的，按 F5 刷新或重启资源管理器。")
 
