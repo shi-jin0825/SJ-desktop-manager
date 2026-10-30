@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """GUI 模块：手机桌面风格的分类管理界面。"""
+import base64
 import os
 import subprocess
 import sys
@@ -8,10 +9,12 @@ from tkinter import simpledialog, messagebox
 
 from core.scanner import scan_desktop
 from core.config import ConfigManager
+from core.icons import icon_png, folder_icon_png
 
-TILE_SIZE = 96      # 单元格宽度
-TILE_H = 100        # 单元格高度
+TILE_SIZE = 96      # 单元格宽度（px）
+TILE_H = 100        # 单元格高度（px）
 COLS = 8            # 每行数量
+ICON_SIZE = 48      # 图标尺寸（px）
 
 
 def open_target(path: str):
@@ -27,6 +30,24 @@ def open_target(path: str):
         messagebox.showerror("打开失败", str(e))
 
 
+def make_photo(png, sink: list):
+    """把 PNG 字节转成 tkinter PhotoImage；sink 用于持有引用防止被回收。"""
+    if not png:
+        return None
+    try:
+        photo = tk.PhotoImage(data=base64.b64encode(png).decode("ascii"))
+    except tk.TclError:
+        return None
+    sink.append(photo)
+    return photo
+
+
+def short_name(name: str, limit: int = 12) -> str:
+    """超过长度用省略号截断，避免磁贴文字被硬切。"""
+    name = name.strip()
+    return name if len(name) <= limit else name[:limit - 1] + "…"
+
+
 class CategoryWindow(tk.Toplevel):
     """某个分类文件夹的内容窗口。"""
 
@@ -38,6 +59,7 @@ class CategoryWindow(tk.Toplevel):
         self.category = category
         self.cfg = config
         self.on_change = on_change
+        self._photos = []
 
         tk.Label(self, text=f"📁 {category}（{len(items)} 项）",
                  font=("Microsoft YaHei", 14, "bold"),
@@ -52,11 +74,19 @@ class CategoryWindow(tk.Toplevel):
                      bg="#f2f2f7", fg="#999").grid(row=0, column=0, columnspan=COLS, pady=40)
 
         for idx, item in enumerate(items):
-            btn = tk.Button(frame, text=f"📄\n{item.display_name[:10]}",
-                            font=("Microsoft YaHei", 9),
-                            width=10, height=4, relief="flat",
-                            bg="#ffffff", activebackground="#e5e5ea",
-                            command=lambda p=item.path: open_target(p))
+            icon = make_photo(icon_png(item.path, ICON_SIZE), self._photos)
+            if icon:
+                btn = tk.Button(frame, image=icon, text=short_name(item.display_name),
+                                compound="top", font=("Microsoft YaHei", 9),
+                                width=90, height=86, relief="flat",
+                                bg="#ffffff", activebackground="#e5e5ea",
+                                command=lambda p=item.path: open_target(p))
+            else:
+                btn = tk.Button(frame, text=f"📄\n{short_name(item.display_name)}",
+                                font=("Microsoft YaHei", 9),
+                                width=10, height=4, relief="flat",
+                                bg="#ffffff", activebackground="#e5e5ea",
+                                command=lambda p=item.path: open_target(p))
             btn.grid(row=idx // COLS, column=idx % COLS, padx=6, pady=6)
             # 右键移出分类
             menu = tk.Menu(btn, tearoff=0)
@@ -82,6 +112,7 @@ class App(tk.Tk):
         self.configure(bg="#eef1f6")
         self.config_mgr = ConfigManager()
         self.items = []
+        self._photos = []
 
         self._build_toolbar()
         self._build_grid_area()
@@ -124,6 +155,7 @@ class App(tk.Tk):
         """重新扫描桌面并渲染网格。"""
         for w in self.grid_frame.winfo_children():
             w.destroy()
+        self._photos = []          # 释放上一轮的图标引用
         self.items = scan_desktop()
         for item in self.items:
             item.category = self.config_mgr.get_category(item.name)
@@ -143,12 +175,21 @@ class App(tk.Tk):
             self._make_item_tile(offset + idx, item)
 
     def _make_folder_tile(self, idx, category, count):
-        btn = tk.Button(self.grid_frame,
-                        text=f"📁\n{category}\n({count})",
-                        font=("Microsoft YaHei", 10),
-                        width=11, height=5, relief="flat",
-                        bg="#dfe7f5", activebackground="#c9d7ef",
-                        command=lambda: self._open_category(category))
+        icon = make_photo(folder_icon_png(ICON_SIZE), self._photos)
+        if icon:
+            btn = tk.Button(self.grid_frame,
+                            image=icon, text=f"{short_name(category)}\n({count})",
+                            compound="top", font=("Microsoft YaHei", 9),
+                            width=TILE_SIZE, height=TILE_H, relief="flat",
+                            bg="#dfe7f5", activebackground="#c9d7ef",
+                            command=lambda: self._open_category(category))
+        else:
+            btn = tk.Button(self.grid_frame,
+                            text=f"📁\n{category}\n({count})",
+                            font=("Microsoft YaHei", 10),
+                            width=11, height=5, relief="flat",
+                            bg="#dfe7f5", activebackground="#c9d7ef",
+                            command=lambda: self._open_category(category))
         btn.grid(row=idx // COLS, column=idx % COLS, padx=8, pady=8)
         menu = tk.Menu(btn, tearoff=0)
         menu.add_command(label="删除此分类",
@@ -156,13 +197,22 @@ class App(tk.Tk):
         btn.bind("<Button-3>", lambda e, m=menu: m.tk_popup(e.x_root, e.y_root))
 
     def _make_item_tile(self, idx, item):
-        icon = {"dir": "🗂", "shortcut": "🧩", "file": "📄"}.get(item.kind, "📄")
-        btn = tk.Button(self.grid_frame,
-                        text=f"{icon}\n{item.display_name[:10]}",
-                        font=("Microsoft YaHei", 9),
-                        width=11, height=5, relief="flat",
-                        bg="#ffffff", activebackground="#e5e5ea",
-                        command=lambda p=item.path: open_target(p))
+        icon = make_photo(icon_png(item.path, ICON_SIZE), self._photos)
+        if icon:
+            btn = tk.Button(self.grid_frame,
+                            image=icon, text=short_name(item.display_name),
+                            compound="top", font=("Microsoft YaHei", 9),
+                            width=TILE_SIZE, height=TILE_H, relief="flat",
+                            bg="#ffffff", activebackground="#e5e5ea",
+                            command=lambda p=item.path: open_target(p))
+        else:
+            emoji = {"dir": "🗂", "shortcut": "🧩", "file": "📄"}.get(item.kind, "📄")
+            btn = tk.Button(self.grid_frame,
+                            text=f"{emoji}\n{short_name(item.display_name)}",
+                            font=("Microsoft YaHei", 9),
+                            width=11, height=5, relief="flat",
+                            bg="#ffffff", activebackground="#e5e5ea",
+                            command=lambda p=item.path: open_target(p))
         btn.grid(row=idx // COLS, column=idx % COLS, padx=8, pady=8)
         menu = tk.Menu(btn, tearoff=0)
         for cat in self.config_mgr.categories:
