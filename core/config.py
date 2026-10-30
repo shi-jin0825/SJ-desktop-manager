@@ -8,7 +8,9 @@ CONFIG_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__fil
 DEFAULT_CONFIG = {
     "categories": ["工具", "办公", "娱乐"],
     # key: 桌面项名称 -> value: 分类名
-    "assignments": {}
+    "assignments": {},
+    # 界面设置（如 theme: light / dark）
+    "settings": {"theme": "light"},
 }
 
 
@@ -34,6 +36,18 @@ class ConfigManager:
     def save(self):
         with open(self.path, "w", encoding="utf-8") as f:
             json.dump(self.data, f, ensure_ascii=False, indent=2)
+
+    # ---- 界面设置 ----
+    @property
+    def settings(self) -> dict:
+        return self.data["settings"]
+
+    def get_setting(self, key: str, default=None):
+        return self.settings.get(key, default)
+
+    def set_setting(self, key: str, value):
+        self.settings[key] = value
+        self.save()
 
     # ---- 分类管理 ----
     @property

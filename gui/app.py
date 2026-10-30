@@ -11,6 +11,7 @@ from tkinter import simpledialog, messagebox
 from core.scanner import scan_desktop
 from core.config import ConfigManager
 from core.icons import icon_png, folder_icon_png
+from gui.theme import (DEFAULT_THEME, THEMES, THEME_NAMES, get_theme, style_menu)
 
 TILE_SIZE = 96      # 单元格宽度（px）
 TILE_H = 100        # 单元格高度（px）
@@ -24,9 +25,6 @@ PREVIEW_GAP = 2         # 小图标间距（px）
 PREVIEW_PAD = 3         # 预览区外边距（px）
 PREVIEW_COLS = 3
 MAX_PREVIEW = PREVIEW_COLS ** 2
-FOLDER_BG = "#dfe7f5"
-FOLDER_BG_HOVER = "#c9d7ef"
-FOLDER_PANEL = "#ffffff"
 
 
 def open_target(path: str):
@@ -100,11 +98,13 @@ def center_window(win, w: int, h: int, parent=None) -> None:
 class CategoryWindow(tk.Toplevel):
     """某个分类文件夹的内容窗口。"""
 
-    def __init__(self, master, category, items, config, on_change):
+    def __init__(self, master, category, items, config, on_change, theme=None):
         super().__init__(master)
+        c = theme or get_theme(DEFAULT_THEME)
+        self.C = c
         self.title(f"📁 {category}")
         center_window(self, 560, 400, master)
-        self.configure(bg="#f2f2f7")
+        self.configure(bg=c["dialog_bg"])
         self.category = category
         self.cfg = config
         self.on_change = on_change
@@ -112,15 +112,16 @@ class CategoryWindow(tk.Toplevel):
 
         tk.Label(self, text=f"📁 {category}（{len(items)} 项）",
                  font=("Microsoft YaHei", 14, "bold"),
-                 bg="#f2f2f7", fg="#333").pack(pady=10)
+                 bg=c["dialog_bg"], fg=c["text"]).pack(pady=10)
 
-        frame = tk.Frame(self, bg="#f2f2f7")
+        frame = tk.Frame(self, bg=c["dialog_bg"])
         frame.pack(fill="both", expand=True, padx=10, pady=5)
         frame.grid_columnconfigure(tuple(range(COLS)), weight=1)
 
         if not items:
             tk.Label(frame, text="空空如也，右键桌面上的项目可移入此分类",
-                     bg="#f2f2f7", fg="#999").grid(row=0, column=0, columnspan=COLS, pady=40)
+                     bg=c["dialog_bg"], fg=c["text_muted"]).grid(
+                row=0, column=0, columnspan=COLS, pady=40)
 
         for idx, item in enumerate(items):
             icon = make_photo(icon_png(item.path, ICON_SIZE), self._photos)
@@ -128,19 +129,22 @@ class CategoryWindow(tk.Toplevel):
                 btn = tk.Button(frame, image=icon, text=short_name(item.display_name),
                                 compound="top", font=("Microsoft YaHei", 9),
                                 width=90, height=86, relief="flat",
-                                bg="#ffffff", activebackground="#e5e5ea",
+                                bg=c["panel_bg"], fg=c["text"],
+                                activebackground=c["panel_active"],
                                 command=lambda p=item.path: open_target(p))
             else:
                 btn = tk.Button(frame, text=f"📄\n{short_name(item.display_name)}",
                                 font=("Microsoft YaHei", 9),
                                 width=10, height=4, relief="flat",
-                                bg="#ffffff", activebackground="#e5e5ea",
+                                bg=c["panel_bg"], fg=c["text"],
+                                activebackground=c["panel_active"],
                                 command=lambda p=item.path: open_target(p))
             btn.grid(row=idx // COLS, column=idx % COLS, padx=6, pady=6)
             # 右键移出分类
             menu = tk.Menu(btn, tearoff=0)
             menu.add_command(label="移出分类",
                              command=lambda n=item.name: self._remove(n))
+            style_menu(menu, c)
             btn.bind("<Button-3>", lambda e, m=menu: m.tk_popup(e.x_root, e.y_root))
 
     def _remove(self, item_name: str):
@@ -162,6 +166,9 @@ class App(tk.Tk):
         self.items = []
         self._photos = []
         self._pet = None          # 桌面悬浮宠物窗口（None = 未召唤）
+        self.theme_name = self.config_mgr.get_setting("theme", DEFAULT_THEME)
+        self.C = get_theme(self.theme_name)
+        self.configure(bg=self.C["app_bg"])
 
         self._build_toolbar()
         self._build_grid_area()
@@ -171,8 +178,10 @@ class App(tk.Tk):
 
     # ---------- 界面搭建 ----------
     def _build_toolbar(self):
-        bar = tk.Frame(self, bg="#eef1f6")
+        c = self.C
+        bar = tk.Frame(self, bg=c["app_bg"])
         bar.pack(fill="x", padx=10, pady=8)
+        self.toolbar = bar
         for text, cmd in [
             ("🔄 刷新 (F5)", self.refresh),
             ("📂 新建分类", self._add_category),
@@ -180,15 +189,23 @@ class App(tk.Tk):
             ("🖥 打开桌面", self._open_desktop),
         ]:
             tk.Button(bar, text=text, font=("Microsoft YaHei", 10),
-                      relief="flat", bg="#ffffff", padx=12, pady=4,
-                      activebackground="#e5e5ea",
+                      relief="flat", bg=c["panel_bg"], fg=c["text"],
+                      padx=12, pady=4, activebackground=c["panel_active"],
+                      activeforeground=c["text"],
                       command=cmd).pack(side="left", padx=4)
         self._pet_btn = tk.Button(bar, text="🐙 桌面宠物",
                                   font=("Microsoft YaHei", 10),
-                                  relief="flat", bg="#ffffff", padx=12, pady=4,
-                                  activebackground="#e5e5ea",
+                                  relief="flat", bg=c["panel_bg"], fg=c["text"],
+                                  padx=12, pady=4,
+                                  activebackground=c["panel_active"],
+                                  activeforeground=c["text"],
                                   command=self._toggle_pet)
         self._pet_btn.pack(side="left", padx=4)
+        tk.Button(bar, text="⚙ 设置", font=("Microsoft YaHei", 10),
+                  relief="flat", bg=c["panel_bg"], fg=c["text"],
+                  padx=12, pady=4, activebackground=c["panel_active"],
+                  activeforeground=c["text"],
+                  command=self._open_settings).pack(side="right", padx=4)
 
     # ---------- 桌面悬浮宠物 ----------
     def _toggle_pet(self):
@@ -209,11 +226,13 @@ class App(tk.Tk):
         self._pet_btn.config(text="🐙 桌面宠物")
 
     def _build_grid_area(self):
-        container = tk.Frame(self, bg="#eef1f6")
+        c = self.C
+        container = tk.Frame(self, bg=c["app_bg"])
         container.pack(fill="both", expand=True, padx=10, pady=(0, 10))
-        self.canvas = tk.Canvas(container, bg="#eef1f6", highlightthickness=0)
+        self.container = container
+        self.canvas = tk.Canvas(container, bg=c["app_bg"], highlightthickness=0)
         scrollbar = tk.Scrollbar(container, orient="vertical", command=self.canvas.yview)
-        self.grid_frame = tk.Frame(self.canvas, bg="#eef1f6")
+        self.grid_frame = tk.Frame(self.canvas, bg=c["app_bg"])
         self.grid_frame.bind("<Configure>",
                              lambda e: self.canvas.configure(scrollregion=self.canvas.bbox("all")))
         self.canvas.create_window((0, 0), window=self.grid_frame, anchor="nw", width=960)
@@ -253,16 +272,17 @@ class App(tk.Tk):
         inner = [i for i in self.items if i.category == category]
         previews = inner[:MAX_PREVIEW]
 
+        c = self.C
         frame = tk.Frame(self.grid_frame, width=TILE_SIZE, height=TILE_H,
-                         bg=FOLDER_BG, highlightthickness=0)
+                         bg=c["folder_bg"], highlightthickness=0)
         frame.grid_propagate(False)
         frame.grid(row=idx // COLS, column=idx % COLS, padx=8, pady=8)
 
         canvas = tk.Canvas(frame, width=FOLDER_PREVIEW, height=FOLDER_PREVIEW,
-                           bg=FOLDER_BG, highlightthickness=0)
+                           bg=c["folder_bg"], highlightthickness=0)
         canvas.pack(pady=(6, 0))
         rounded_rect(canvas, 1, 1, FOLDER_PREVIEW - 1, FOLDER_PREVIEW - 1,
-                     r=12, fill=FOLDER_PANEL, outline="#c9d7ef")
+                     r=12, fill=c["folder_panel"], outline=c["folder_panel_outline"])
 
         if previews:
             for i, item in enumerate(previews):
@@ -275,25 +295,27 @@ class App(tk.Tk):
                 else:  # 拿不到图标时的占位块
                     canvas.create_rectangle(x - PREVIEW_ICON // 2 + 2, y - PREVIEW_ICON // 2 + 2,
                                             x + PREVIEW_ICON // 2 - 2, y + PREVIEW_ICON // 2 - 2,
-                                            fill="#e5e5ea", outline="#d0d0d8")
+                                            fill=c["placeholder"],
+                                            outline=c["placeholder_outline"])
         else:
             canvas.create_text(FOLDER_PREVIEW // 2, FOLDER_PREVIEW // 2,
-                               text="空", fill="#a3a3ad",
+                               text="空", fill=c["empty_text"],
                                font=("Microsoft YaHei", 12, "bold"))
 
         label = tk.Label(frame, text=f"{short_name(category)} ({count})",
-                         bg=FOLDER_BG, fg="#333333",
+                         bg=c["folder_bg"], fg=c["text"],
                          font=("Microsoft YaHei", 9), cursor="hand2")
         label.pack(pady=(4, 0))
 
         menu = tk.Menu(frame, tearoff=0)
         menu.add_command(label="删除此分类",
                          command=lambda: self._delete_category(category))
+        style_menu(menu, c)
 
         open_cmd = lambda e=None: self._open_category(category)
         popup = lambda e: menu.tk_popup(e.x_root, e.y_root)
-        enter = lambda e: self._hover_tile(frame, (canvas, label), FOLDER_BG_HOVER)
-        leave = lambda e: self._hover_tile(frame, (canvas, label), FOLDER_BG)
+        enter = lambda e: self._hover_tile(frame, (canvas, label), c["folder_bg_hover"])
+        leave = lambda e: self._hover_tile(frame, (canvas, label), c["folder_bg"])
         for w in (frame, canvas, label):
             w.bind("<Button-1>", open_cmd)
             w.bind("<Button-3>", popup)
@@ -311,13 +333,16 @@ class App(tk.Tk):
             w.configure(bg=color)
 
     def _make_item_tile(self, idx, item):
+        c = self.C
         icon = make_photo(icon_png(item.path, ICON_SIZE), self._photos)
         if icon:
             btn = tk.Button(self.grid_frame,
                             image=icon, text=short_name(item.display_name),
                             compound="top", font=("Microsoft YaHei", 9),
                             width=TILE_SIZE, height=TILE_H, relief="flat",
-                            bg="#ffffff", activebackground="#e5e5ea",
+                            bg=c["panel_bg"], fg=c["text"],
+                            activebackground=c["panel_active"],
+                            activeforeground=c["text"],
                             command=lambda p=item.path: open_target(p))
         else:
             emoji = {"dir": "🗂", "shortcut": "🧩", "file": "📄"}.get(item.kind, "📄")
@@ -325,7 +350,9 @@ class App(tk.Tk):
                             text=f"{emoji}\n{short_name(item.display_name)}",
                             font=("Microsoft YaHei", 9),
                             width=11, height=5, relief="flat",
-                            bg="#ffffff", activebackground="#e5e5ea",
+                            bg=c["panel_bg"], fg=c["text"],
+                            activebackground=c["panel_active"],
+                            activeforeground=c["text"],
                             command=lambda p=item.path: open_target(p))
         btn.grid(row=idx // COLS, column=idx % COLS, padx=8, pady=8)
         menu = tk.Menu(btn, tearoff=0)
@@ -334,12 +361,14 @@ class App(tk.Tk):
                              command=lambda n=item.name, c=cat: self._assign(n, c))
         menu.add_separator()
         menu.add_command(label="移出当前分类", command=lambda: self._unassign(item.name))
+        style_menu(menu, c)
         btn.bind("<Button-3>", lambda e, m=menu: m.tk_popup(e.x_root, e.y_root))
 
     # ---------- 动作 ----------
     def _open_category(self, category):
         items = [i for i in self.items if i.category == category]
-        CategoryWindow(self, category, items, self.config_mgr, on_change=self.refresh)
+        CategoryWindow(self, category, items, self.config_mgr,
+                       on_change=self.refresh, theme=self.C)
 
     def _assign(self, item_name, category):
         self.config_mgr.assign(item_name, category)
@@ -367,26 +396,31 @@ class App(tk.Tk):
         这里做真正的管理操作（新建只是其中一项），与工具栏的
         「新建分类」快捷入口不重复。
         """
+        c = self.C
         win = tk.Toplevel(self)
         win.title("管理分类")
         win.transient(self)
         center_window(win, 330, 380, self)
-        win.configure(bg="#f4f6fa")
+        win.configure(bg=c["dialog_bg"])
         win.resizable(False, False)
         win.grab_set()          # 模态（不阻塞主循环，桌宠动画照常）
 
-        top = tk.Frame(win, bg="#f4f6fa")
+        top = tk.Frame(win, bg=c["dialog_bg"])
         top.pack(fill="both", expand=True, padx=12, pady=(12, 0))
         tk.Label(top, text="分类列表（括号内为项目数）",
-                 font=("Microsoft YaHei", 10), bg="#f4f6fa",
+                 font=("Microsoft YaHei", 10), bg=c["dialog_bg"], fg=c["text"],
                  anchor="w").pack(fill="x")
 
-        body = tk.Frame(top, bg="#f4f6fa")
+        body = tk.Frame(top, bg=c["dialog_bg"])
         body.pack(fill="both", expand=True, pady=6)
         scroll = tk.Scrollbar(body)
         scroll.pack(side="right", fill="y")
         lst = tk.Listbox(body, font=("Microsoft YaHei", 10), relief="solid",
                          bd=1, activestyle="none", height=10,
+                         bg=c["panel_bg"], fg=c["text"],
+                         selectbackground=c["list_sel"],
+                         selectforeground=c["text"],
+                         highlightthickness=0,
                          yscrollcommand=scroll.set)
         lst.pack(side="left", fill="both", expand=True)
         scroll.config(command=lst.yview)
@@ -446,20 +480,105 @@ class App(tk.Tk):
                 reload()
                 self.refresh()
 
-        bar = tk.Frame(win, bg="#f4f6fa")
+        bar = tk.Frame(win, bg=c["dialog_bg"])
         bar.pack(fill="x", padx=12, pady=8)
         for text, cmd in (("➕ 新建", do_add), ("✏️ 重命名", do_rename),
                           ("🗑 删除", do_delete)):
             tk.Button(bar, text=text, font=("Microsoft YaHei", 9),
-                      relief="flat", bg="#ffffff", activebackground="#e5e5ea",
+                      relief="flat", bg=c["panel_bg"], fg=c["text"],
+                      activebackground=c["panel_active"],
+                      activeforeground=c["text"],
                       padx=8, pady=4, command=cmd).pack(side="left", padx=3)
         tk.Button(bar, text="关闭", font=("Microsoft YaHei", 9), relief="flat",
-                  bg="#ffffff", activebackground="#e5e5ea", padx=10, pady=4,
+                  bg=c["panel_bg"], fg=c["text"],
+                  activebackground=c["panel_active"],
+                  activeforeground=c["text"], padx=10, pady=4,
                   command=win.destroy).pack(side="right")
 
         lst.bind("<Double-Button-1>", lambda e: do_rename())
         reload()
         win.protocol("WM_DELETE_WINDOW", win.destroy)
+
+    def _open_settings(self):
+        """设置窗口：切换浅色 / 深色主题（立即生效并写入 config.json）。"""
+        win = tk.Toplevel(self)
+        win.title("设置")
+        win.transient(self)
+        center_window(win, 380, 300, self)
+        win.resizable(False, False)
+        win.grab_set()
+
+        holder = tk.Frame(win)
+        holder.pack(fill="both", expand=True, padx=16, pady=16)
+        var = tk.StringVar(value=self.theme_name)
+
+        def build():
+            """按当前主题重建窗口内容（切换主题后窗口自己也跟着换色）。"""
+            c = self.C
+            win.configure(bg=c["dialog_bg"])
+            holder.configure(bg=c["dialog_bg"])
+            for w in holder.winfo_children():
+                w.destroy()
+
+            tk.Label(holder, text="⚙ 设置", font=("Microsoft YaHei", 14, "bold"),
+                     bg=c["dialog_bg"], fg=c["text"], anchor="w").pack(
+                fill="x", pady=(0, 12))
+            tk.Label(holder, text="界面主题", font=("Microsoft YaHei", 10, "bold"),
+                     bg=c["dialog_bg"], fg=c["text"], anchor="w").pack(fill="x")
+
+            for key in ("light", "dark"):
+                tk.Radiobutton(holder, text=THEME_NAMES[key], value=key,
+                               variable=var, font=("Microsoft YaHei", 10),
+                               bg=c["dialog_bg"], fg=c["text"],
+                               selectcolor=c["panel_bg"],
+                               activebackground=c["dialog_bg"],
+                               activeforeground=c["text"],
+                               highlightthickness=0, bd=0,
+                               command=on_pick).pack(anchor="w", pady=4)
+
+            # 配色预览色卡
+            chips = tk.Frame(holder, bg=c["dialog_bg"])
+            chips.pack(fill="x", pady=12)
+            for name, key in (("背景", "app_bg"), ("磁贴", "panel_bg"),
+                              ("文字", "text"), ("文件夹", "folder_bg")):
+                tk.Label(chips, text=name, width=6, font=("Microsoft YaHei", 8),
+                         bg=c[key], fg=c["text"], padx=4, pady=6
+                         ).pack(side="left", padx=3)
+
+            tk.Label(holder, text="切换后立即生效，并保存到 config.json",
+                     bg=c["dialog_bg"], fg=c["text_muted"],
+                     font=("Microsoft YaHei", 8), anchor="w").pack(fill="x", pady=(6, 0))
+            tk.Button(holder, text="完成", font=("Microsoft YaHei", 9),
+                      relief="flat", bg=c["panel_bg"], fg=c["text"],
+                      activebackground=c["panel_active"],
+                      activeforeground=c["text"], padx=14, pady=4,
+                      command=win.destroy).pack(anchor="e", pady=(12, 0))
+
+        def on_pick():
+            self._apply_theme(var.get())
+            build()
+
+        build()
+        win.protocol("WM_DELETE_WINDOW", win.destroy)
+
+    def _apply_theme(self, name: str):
+        """切换主题：更新配色、保存配置、重建工具栏与网格。"""
+        if name not in THEMES:
+            name = DEFAULT_THEME
+        self.theme_name = name
+        self.C = get_theme(name)
+        self.config_mgr.set_setting("theme", name)
+        self.configure(bg=self.C["app_bg"])
+        # 控件颜色只能在创建时指定，因此重建这两块区域
+        for attr in ("toolbar", "container"):
+            w = getattr(self, attr, None)
+            if w is not None:
+                w.destroy()
+        self._build_toolbar()
+        self._build_grid_area()
+        self.refresh()
+        if getattr(self, "_pet", None) is not None:
+            self._pet_btn.config(text="🐙 收起宠物")
 
     def _open_desktop(self):
         from core.scanner import get_desktop_paths
