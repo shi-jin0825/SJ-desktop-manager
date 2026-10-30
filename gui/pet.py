@@ -41,7 +41,8 @@ MARGIN_BOTTOM = 110          # 初始位置：距屏幕底边（留任务栏）
 
 KEY_COLOR = "#ff00ff"        # 透明色（品红）；图片里若有同色像素会被挖空
 
-HAPPY_MS = 900               # ★点击后眯眼笑形态保持的毫秒数，之后变回睁眼
+HAPPY_MS = 350               # ★点击后眯眼笑形态保持的毫秒数，之后变回睁眼
+                             #            350 轻快 / 700 标准 / 1200 慢悠悠
 
 # ==========================================================================
 #  Win32
@@ -384,6 +385,11 @@ class DesktopPet(tk.Toplevel):
                 self.show_happy()
 
     # ---------- 表情 ----------
+    def set_happy_ms(self, ms):
+        """设置眯眼笑保持时长（毫秒）。"""
+        global HAPPY_MS
+        HAPPY_MS = ms
+
     def show_happy(self):
         """单击墨墨：眯眼笑一会儿，再变回睁眼。"""
         if self._photo_happy is self._photo:
@@ -415,6 +421,10 @@ class DesktopPet(tk.Toplevel):
                                command=lambda: self.set_speed(2.0, 6))
         self._menu.add_command(label="浮动：静止",
                                command=lambda: self.set_speed(4.0, 0))
+        self._menu.add_separator()
+        self._menu.add_command(label="眨眼：轻快", command=lambda: self.set_happy_ms(350))
+        self._menu.add_command(label="眨眼：标准", command=lambda: self.set_happy_ms(700))
+        self._menu.add_command(label="眨眼：慢悠悠", command=lambda: self.set_happy_ms(1200))
         self._menu.add_separator()
         self._menu.add_command(label="收起墨墨", command=self.on_close)
 
