@@ -61,6 +61,21 @@ def _hwnd_result(hr, what):
         raise OSError(f"{what} 失败: HRESULT=0x{hr & 0xFFFFFFFF:08X}")
 
 
+def refresh_shell():
+    """通知资源管理器刷新图标缓存，让新图标立即生效。"""
+    shell32 = ctypes.WinDLL("shell32")
+    SHCNE_ASSOCCHANGED = 0x08000000
+    SHCNE_UPDATEITEM = 0x00002000
+    SHCNF_PATHW = 0x0005
+    SHCNF_IDLIST = 0x0000
+    try:
+        shell32.SHChangeNotify(SHCNE_ASSOCCHANGED, SHCNF_IDLIST, None, None)
+        shell32.SHChangeNotify(SHCNE_UPDATEITEM, SHCNF_PATHW,
+                               os.path.join(desktop_dir(), GOOD_NAME), None)
+    except OSError:
+        pass
+
+
 def update_shortcut(lnk_path: str, target: str, arguments: str, workdir: str,
                     icon: str, description: str) -> None:
     """创建或更新一个 .lnk 快捷方式。"""
@@ -153,8 +168,9 @@ def main():
 
     print(f"写入快捷方式：{lnk}")
     update_shortcut(lnk, target=PYTHONW, arguments=f'"{MAIN_PY}"',
-                    workdir=PROJ, icon=ICON + ",0", description="SJ 桌面管理器")
-    print("完成。")
+                    workdir=PROJ, icon=ICON, description="SJ 桌面管理器")
+    refresh_shell()
+    print("完成。若桌面图标仍是旧的，按 F5 刷新或重启资源管理器。")
 
 
 if __name__ == "__main__":
