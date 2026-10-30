@@ -3,39 +3,85 @@
 一款用 Python（tkinter）编写的 Windows 桌面管理器，把桌面变成"手机桌面"：
 扫描桌面上的文件、文件夹和快捷方式，按你自定义的分类归入"文件夹"，清晰一目了然。
 
+![截图](assets/screenshot.png)
+
 ## 功能
 
 - 🔄 自动扫描桌面（含公共桌面）上的文件 / 文件夹 / `.lnk` / `.url` 快捷方式
-- 📁 自由新建 / 删除分类（如：工具、办公、娱乐），分类以文件夹样式置顶展示
+- 🖼 **显示每个项目的系统真实图标**（而非统一的文件 emoji）——通过 Windows Shell 的
+  `IShellItemImageFactory` 接口提取 48×48 带 alpha 通道的真彩图标，能正确解析
+  Steam / UWP 类快捷方式的目标程序图标；提取失败时回退 `SHGetFileInfoW`，再回退 emoji
+- 📁 **手机文件夹式分类磁贴**：分类磁贴内部按 3×3 预览该分类前 9 个项目的真实小图标，
+  不打开文件夹就能看清里面放了什么；空分类显示提示，悬停高亮，圆角面板样式
 - 🖱 双击即打开对应文件或程序；右键可将任意项目移入 / 移出分类
 - 💾 分类与分配关系保存在 `config.json`，不会移动或改动桌面上的真实文件
 - ⌨️ F5 刷新
+- 🧹 自动过滤 `desktop.ini` 等隐藏 / 系统文件，不会混进网格
+
+整个程序**只依赖 Python 标准库**（tkinter + ctypes 调用 Win32/COM），
+包括图标提取和 PNG 编码都是纯标准库实现，无任何第三方依赖。
 
 ## 运行
+
+双击 `run.bat`（内部用 `pythonw.exe` 启动，**不会弹出命令行黑框**），或：
 
 ```bash
 python main.py
 ```
 
-仅使用 Python 标准库（tkinter），**无需安装任何第三方依赖**。要求 Python 3.8+。
+要求 Windows 10+ 与 Python 3.8+。首次运行会在项目根目录生成 `config.json`。
+
+## 专属图标与快捷方式
+
+`assets/app-grid.ico` 是用 `tools/make_icon.py` 纯 Python 合成的应用图标
+（蓝色圆角底 + 3×3 真实应用图标，内嵌 256/64/48/32/16 五个尺寸）。
+`tools/make_shortcut.py` 可以一键在桌面创建指向本程序的快捷方式并应用该图标
+（通过 ctypes 直接调用 `IShellLinkW` + `IPersistFile` COM 接口，同样零依赖）：
+
+```bash
+python tools/make_icon.py       # 重新生成 assets/*.ico
+python tools/make_shortcut.py   # 在桌面创建/更新快捷方式
+```
 
 ## 项目结构
 
 ```
 SJ-desktop-manager/
-├── main.py            # 启动入口
+├── main.py                # 启动入口
+├── run.bat                # 一键启动（pythonw，无黑框）
 ├── core/
-│   ├── scanner.py     # 桌面项扫描
-│   └── config.py      # 分类配置持久化（config.json）
+│   ├── scanner.py         # 桌面项扫描（过滤隐藏/系统文件）
+│   ├── config.py          # 分类配置持久化（config.json）
+│   └── icons.py           # 系统图标提取（Shell COM + 纯标准库 PNG 编码）
 ├── gui/
-│   └── app.py         # 手机桌面式 GUI（tkinter）
-└── config.json        # 首次运行自动生成
+│   └── app.py             # 手机桌面式 GUI（tkinter）
+├── tools/
+│   ├── make_icon.py       # 合成应用 .ico 图标
+│   └── make_shortcut.py   # 创建/更新桌面快捷方式
+├── assets/                # 生成的 .ico 与截图
+└── config.json            # 首次运行自动生成
 ```
+
+## 更新日志
+
+### v0.2 — 界面与体验优化
+
+- **真实图标**：所有磁贴显示系统真实图标（`IShellItemImageFactory` 优先，
+  `SHGetFileInfoW` 兜底），彻底告别"全靠 emoji 分辨"
+- **文件夹预览磁贴**：分类磁贴内 3×3 预览分类内容的小图标，还原手机桌面文件夹体验
+- **一键启动**：新增 `run.bat`，`pythonw` 启动全程无命令行黑框
+- **专属应用图标**：纯 Python 合成多尺寸 `.ico`，并附一键创建桌面快捷方式的工具
+- **修复**：分类窗口右键"移出分类"崩溃（缺失方法）；图标红蓝通道反色；
+  隐藏/系统文件混入网格；长文件名截断改用省略号
+
+### v0.1 — 初始版本
+
+- 桌面扫描、分类管理、双击打开、F5 刷新
 
 ## Roadmap
 
 - [ ] 拖拽分配项目到分类
-- [ ] 提取快捷方式真实图标
+- [x] 提取快捷方式真实图标
 - [ ] 多页面（分页滑动）
 - [ ] 开机自启动
 
