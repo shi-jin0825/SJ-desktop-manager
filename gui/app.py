@@ -3,6 +3,7 @@
 import base64
 import math
 import os
+import random
 import subprocess
 import sys
 import tkinter as tk
@@ -16,6 +17,16 @@ TILE_SIZE = 96      # 单元格宽度（px）
 TILE_H = 100        # 单元格高度（px）
 COLS = 8            # 每行数量
 ICON_SIZE = 48      # 普通磁贴图标尺寸（px）
+
+# 桌宠「墨墨」点击气泡语录
+MASCOT_LINES = (
+    "嘎呜～我是墨墨！",
+    "拖我到任何地方都可以哦～",
+    "今天也要好好整理桌面呀！",
+    "墨～墨～",
+    "桌面整理就交给墨墨吧！",
+    "想把文件分类？右键它试试！",
+)
 
 # 分类文件夹预览（手机文件夹式：3×3 缩略图标）
 FOLDER_PREVIEW = 70     # 预览画布边长（px）
@@ -139,6 +150,7 @@ class App(tk.Tk):
 
         self._build_toolbar()
         self._build_grid_area()
+        self._build_mascot()
         self.refresh()
         self.bind("<F5>", lambda e: self.refresh())
 
@@ -172,6 +184,65 @@ class App(tk.Tk):
         # 鼠标滚轮
         self.canvas.bind_all("<MouseWheel>",
                              lambda e: self.canvas.yview_scroll(-1 * (e.delta // 120), "units"))
+
+    # ---------- 桌宠：墨墨 ----------
+    def _build_mascot(self):
+        """右下角悬浮的墨墨立绘，可拖到窗口任意位置，点击冒气泡。"""
+        path = os.path.join(os.path.dirname(os.path.dirname(
+            os.path.abspath(__file__))), "assets", "mascot-stand.png")
+        try:
+            photo = tk.PhotoImage(file=path)
+        except tk.TclError:
+            return
+        self._photos.append(photo)          # 防止被 GC
+        self._mascot_photo = photo          # 独立持有（refresh 会重置 _photos）
+        self._mascot = tk.Label(self, image=photo, bg="#eef1f6", cursor="hand2")
+        self._mascot.place(relx=1.0, rely=1.0, x=-26, y=-22, anchor="se")
+        self._mascot.lift()
+        self._drag = None
+        self._bubble = None
+        self._mascot.bind("<Button-1>", self._mascot_press)
+        self._mascot.bind("<B1-Motion>", self._mascot_drag)
+        self._mascot.bind("<ButtonRelease-1>", self._mascot_release)
+
+    def _mascot_press(self, e):
+        self._drag = (e.x, e.y, False)
+
+    def _mascot_drag(self, e):
+        if not self._drag:
+            return
+        gx, gy, _ = self._drag
+        x = e.x_root - self.winfo_rootx() - gx
+        y = e.y_root - self.winfo_rooty() - gy
+        w = max(1, self.winfo_width() - self._mascot.winfo_width())
+        h = max(1, self.winfo_height() - self._mascot.winfo_height())
+        # place 选项是累积的，必须显式清零初始的 relx/rely
+        self._mascot.place(x=min(max(0, x), w), y=min(max(0, y), h),
+                           relx=0, rely=0, anchor="nw")
+        self._drag = (gx, gy, True)
+
+    def _mascot_release(self, e):
+        if self._drag and not self._drag[2]:    # 未移动 = 单击
+            self._mascot_bubble()
+        self._drag = None
+
+    def _mascot_bubble(self):
+        if self._bubble is not None:
+            return
+        bubble = tk.Label(self, text=random.choice(MASCOT_LINES),
+                          font=("Microsoft YaHei", 9), bg="#12403f", fg="#eafff6",
+                          padx=10, pady=5)
+        x = self._mascot.winfo_x()
+        y = self._mascot.winfo_y()
+        bubble.place(x=max(8, x - 70), y=max(8, y - 46))
+        bubble.lift()
+        self._bubble = bubble
+        self.after(1800, self._bubble_hide)
+
+    def _bubble_hide(self):
+        if self._bubble is not None:
+            self._bubble.destroy()
+            self._bubble = None
 
     # ---------- 数据与渲染 ----------
     def refresh(self):
