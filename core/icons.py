@@ -6,8 +6,8 @@
        GetImage(SIIGBF_ICONONLY)），能正确解析 .lnk 快捷方式（含 Steam/UWP 应用）
        的目标图标，直接返回带 alpha 的 32 位 HBITMAP；
     2. 失败时回退 SHGetFileInfoW + DrawIconEx；
-    3. 像素（BGRA）用 zlib + struct 编码为 PNG，交给 tkinter 的 PhotoImage
-       显示（Tk 8.6 原生支持 PNG），全程无需 Pillow。
+    3. 像素统一转成 RGBA，可输出 PNG（zlib + struct 编码）供 tkinter 显示，
+       也可取原始像素用于合成自定义图标（如 .ico 生成）。
 
 非 Windows 平台返回 None，GUI 回退到 emoji。
 """
@@ -31,7 +31,6 @@ SHGFI_ICON = 0x000000100
 SHGFI_LARGEICON = 0x000000000
 SHGFI_USEFILEATTRIBUTES = 0x000000010
 FILE_ATTRIBUTE_DIRECTORY = 0x000000010
-FILE_ATTRIBUTE_NORMAL = 0x000000080
 DI_NORMAL = 0x0003
 DIB_RGB_COLORS = 0
 SIIGBF_ICONONLY = 0x4
@@ -88,16 +87,14 @@ def _ensure_com():
         _COM_INITED = True
 
 
-def _png_from_bgra(buf: bytes, w: int, h: int) -> bytes:
-    """把 BGRA 像素流编码为 RGBA 的 PNG（Windows 位图是 BGRA，需交换 R/B 通道）。"""
+# ---------------- 像素编码 ----------------
+def png_from_rgba(buf: bytes, w: int, h: int) -> bytes:
+    """把 RGBA 像素流编码为 PNG。"""
     stride = w * 4
     raw = bytearray()
     for y in range(h):
-        row = buf[y * stride:(y + 1) * stride]
         raw.append(0)  # filter type 0
-        for x in range(w):
-            b, g, r, a = row[x * 4:x * 4 + 4]
-            raw += bytes((r, g, b, a))
+        raw += buf[y * stride:(y + 1) * stride]
 
     def chunk(tag: bytes, data: bytes) -> bytes:
         body = tag + data
@@ -110,8 +107,18 @@ def _png_from_bgra(buf: bytes, w: int, h: int) -> bytes:
             + chunk(b"IEND", b""))
 
 
-def _hbitmap_to_png(hbmp, ) -> bytes:
-    """把 32 位 HBITMAP 转成 PNG 字节。"""
+def _bgra_to_rgba(buf: bytes) -> bytes:
+    """Windows 位图是 BGRA，交换 R/B 通道得到 RGBA。"""
+    out = bytearray(len(buf))
+    for i in range(0, len(buf), 4):
+        b, g, r, a = buf[i:i + 4]
+        out[i:i + 4] = bytes((r, g, b, a))
+    return bytes(out)
+
+
+# ---------------- 原始像素提取 ----------------
+def _bitmap_bgra(hbmp):
+    """32 位 HBITMAP -> (w, h, BGRA bytes)；失败返回 None。"""
     class _BM(ctypes.Structure):
         _fields_ = [("bmType", ctypes.c_long), ("bmWidth", ctypes.c_long),
                     ("bmHeight", ctypes.c_long), ("bmWidthBytes", ctypes.c_long),
@@ -133,10 +140,10 @@ def _hbitmap_to_png(hbmp, ) -> bytes:
     hdc = _user32.GetDC(0)
     _gdi32.GetDIBits(hdc, hbmp, 0, h, buf, ctypes.byref(bmi), DIB_RGB_COLORS)
     _user32.ReleaseDC(0, hdc)
-    return _png_from_bgra(buf.raw[:w * h * 4], w, h)
+    return w, h, buf.raw[:w * h * 4]
 
 
-def _icon_via_factory(path: str, size: int):
+def _rgba_via_factory(path: str, size: int):
     """IShellItemImageFactory::GetImage —— 解析快捷方式最可靠。"""
     _ensure_com()
     p = ctypes.c_void_p()
@@ -145,10 +152,10 @@ def _icon_via_factory(path: str, size: int):
                                       ctypes.byref(p))
     if hr != 0 or not p.value:
         return None
+    vtbl = ctypes.cast(ctypes.cast(p, ctypes.POINTER(ctypes.c_void_p)).contents,
+                       ctypes.POINTER(ctypes.c_void_p))
     try:
         # vtable: [0]QueryInterface [1]AddRef [2]Release [3]GetImage
-        vtbl = ctypes.cast(ctypes.cast(p, ctypes.POINTER(ctypes.c_void_p)).contents,
-                           ctypes.POINTER(ctypes.c_void_p))
         GetImage = ctypes.WINFUNCTYPE(
             ctypes.HRESULT, ctypes.c_void_p, _SIZE, ctypes.c_uint,
             ctypes.POINTER(ctypes.c_void_p))(vtbl[3])
@@ -157,7 +164,11 @@ def _icon_via_factory(path: str, size: int):
         if hr != 0 or not hbmp.value:
             return None
         try:
-            return _hbitmap_to_png(hbmp)
+            got = _bitmap_bgra(hbmp)
+            if not got:
+                return None
+            w, h, bgra = got
+            return w, h, _bgra_to_rgba(bgra)
         finally:
             _gdi32.DeleteObject(hbmp)
     finally:
@@ -165,8 +176,16 @@ def _icon_via_factory(path: str, size: int):
         Release(p)
 
 
-def _hicon_to_png(hicon, size: int):
-    """SHGetFileInfo 路线：把 HICON 绘制到 32 位 DIB 再转 PNG（回退方案）。"""
+def _rgba_via_shgetfileinfo(path: str, attrs: int, size: int):
+    """回退方案：SHGetFileInfoW 取 HICON 后画到 32 位 DIB。"""
+    sfi = SHFILEINFOW()
+    flags = SHGFI_ICON | SHGFI_LARGEICON
+    if attrs:
+        flags |= SHGFI_USEFILEATTRIBUTES
+    res = _shell32.SHGetFileInfoW(path, attrs, ctypes.byref(sfi),
+                                  ctypes.sizeof(SHFILEINFOW), flags)
+    if not res or not sfi.hIcon:
+        return None
     hdc = _user32.GetDC(0)
     memdc = _gdi32.CreateCompatibleDC(hdc)
     bmi = _BMI()
@@ -183,37 +202,42 @@ def _hicon_to_png(hicon, size: int):
     if not bmp or not bits:
         _gdi32.DeleteDC(memdc)
         _user32.ReleaseDC(0, hdc)
-        return None
-    old = _gdi32.SelectObject(memdc, bmp)
-    ctypes.memset(bits, 0, size * size * 4)   # 透明底
-    ok = _user32.DrawIconEx(memdc, 0, 0, hicon, size, size, 0, None, DI_NORMAL)
-    png = None
-    if ok:
-        png = _png_from_bgra(ctypes.string_at(bits, size * size * 4), size, size)
-    _gdi32.SelectObject(memdc, old)
-    _gdi32.DeleteObject(bmp)
-    _gdi32.DeleteDC(memdc)
-    _user32.ReleaseDC(0, hdc)
-    return png
-
-
-def _icon_via_shgetfileinfo(path: str, attrs: int, size: int):
-    """回退方案：SHGetFileInfoW 取 HICON。attrs 非 0 时启用 USEFILEATTRIBUTES。"""
-    sfi = SHFILEINFOW()
-    flags = SHGFI_ICON | SHGFI_LARGEICON
-    if attrs:
-        flags |= SHGFI_USEFILEATTRIBUTES
-    res = _shell32.SHGetFileInfoW(path, attrs, ctypes.byref(sfi),
-                                  ctypes.sizeof(SHFILEINFOW), flags)
-    if not res or not sfi.hIcon:
+        _user32.DestroyIcon(sfi.hIcon)
         return None
     try:
-        return _hicon_to_png(sfi.hIcon, size)
+        _gdi32.SelectObject(memdc, bmp)
+        ctypes.memset(bits, 0, size * size * 4)   # 透明底
+        ok = _user32.DrawIconEx(memdc, 0, 0, sfi.hIcon, size, size, 0, None, DI_NORMAL)
+        if not ok:
+            return None
+        return size, size, _bgra_to_rgba(ctypes.string_at(bits, size * size * 4))
     finally:
+        _gdi32.DeleteObject(bmp)
+        _gdi32.DeleteDC(memdc)
+        _user32.ReleaseDC(0, hdc)
         _user32.DestroyIcon(sfi.hIcon)
 
 
-_CACHE = {}
+_PNG_CACHE = {}
+_RGBA_CACHE = {}
+
+
+def icon_rgba(path: str, size: int = 48):
+    """取图标原始像素，返回 (w, h, RGBA bytes)；失败返回 None。"""
+    if not _WIN:
+        return None
+    key = (os.path.abspath(path).lower(), size)
+    if key in _RGBA_CACHE:
+        return _RGBA_CACHE[key]
+    got = None
+    try:
+        got = _rgba_via_factory(path, size)
+        if got is None:
+            got = _rgba_via_shgetfileinfo(str(path), 0, min(size, 32))
+    except Exception:
+        got = None
+    _RGBA_CACHE[key] = got
+    return got
 
 
 def icon_png(path: str, size: int = 48):
@@ -221,17 +245,11 @@ def icon_png(path: str, size: int = 48):
     if not _WIN:
         return None
     key = (os.path.abspath(path).lower(), size)
-    if key in _CACHE:
-        return _CACHE[key]
-    png = None
-    try:
-        png = _icon_via_factory(path, size)
-        if png is None:
-            png = _icon_via_shgetfileinfo(str(path), 0, min(size, 32))
-    except Exception:
-        png = None
-    _CACHE[key] = png
-    return png
+    if key in _PNG_CACHE:
+        return _PNG_CACHE[key]
+    got = icon_rgba(path, size)
+    _PNG_CACHE[key] = png_from_rgba(got[2], got[0], got[1]) if got else None
+    return _PNG_CACHE[key]
 
 
 def folder_icon_png(size: int = 48):
@@ -239,19 +257,19 @@ def folder_icon_png(size: int = 48):
     if not _WIN:
         return None
     key = ("<folder>", size)
-    if key in _CACHE:
-        return _CACHE[key]
-    png = None
+    if key in _PNG_CACHE:
+        return _PNG_CACHE[key]
+    got = None
     try:
-        # 用一个真实存在的目录取文件夹图标
-        png = _icon_via_factory(os.path.expanduser("~"), size)
-        if png is None:
-            png = _icon_via_shgetfileinfo("folder", FILE_ATTRIBUTE_DIRECTORY, 32)
+        got = icon_rgba(os.path.expanduser("~"), size)
+        if got is None:
+            got = _rgba_via_shgetfileinfo("folder", FILE_ATTRIBUTE_DIRECTORY, 32)
     except Exception:
-        png = None
-    _CACHE[key] = png
-    return png
+        got = None
+    _PNG_CACHE[key] = png_from_rgba(got[2], got[0], got[1]) if got else None
+    return _PNG_CACHE[key]
 
 
 def clear_cache():
-    _CACHE.clear()
+    _PNG_CACHE.clear()
+    _RGBA_CACHE.clear()
