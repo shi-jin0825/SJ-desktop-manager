@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """GUI 模块：手机桌面风格的分类管理界面。"""
 import base64
+import math
 import os
 import subprocess
 import sys
@@ -14,7 +15,18 @@ from core.icons import icon_png, folder_icon_png
 TILE_SIZE = 96      # 单元格宽度（px）
 TILE_H = 100        # 单元格高度（px）
 COLS = 8            # 每行数量
-ICON_SIZE = 48      # 图标尺寸（px）
+ICON_SIZE = 48      # 普通磁贴图标尺寸（px）
+
+# 分类文件夹预览（手机文件夹式：3×3 缩略图标）
+FOLDER_PREVIEW = 70     # 预览画布边长（px）
+PREVIEW_ICON = 20       # 预览内单个小图标边长（px）
+PREVIEW_GAP = 2         # 小图标间距（px）
+PREVIEW_PAD = 3         # 预览区外边距（px）
+PREVIEW_COLS = 3
+MAX_PREVIEW = PREVIEW_COLS ** 2
+FOLDER_BG = "#dfe7f5"
+FOLDER_BG_HOVER = "#c9d7ef"
+FOLDER_PANEL = "#ffffff"
 
 
 def open_target(path: str):
@@ -40,6 +52,17 @@ def make_photo(png, sink: list):
         return None
     sink.append(photo)
     return photo
+
+
+def rounded_rect(canvas, x1, y1, x2, y2, r=12, **kw):
+    """在 Canvas 上画圆角矩形（tkinter 没有原生圆角矩形）。"""
+    pts = []
+    for cx, cy, start in ((x1 + r, y1 + r, 180), (x2 - r, y1 + r, 270),
+                          (x2 - r, y2 - r, 0), (x1 + r, y2 - r, 90)):
+        for i in range(11):
+            a = math.radians(start + i * 9)
+            pts += (cx + r * math.cos(a), cy + r * math.sin(a))
+    return canvas.create_polygon(pts, smooth=True, **kw)
 
 
 def short_name(name: str, limit: int = 12) -> str:
@@ -175,26 +198,66 @@ class App(tk.Tk):
             self._make_item_tile(offset + idx, item)
 
     def _make_folder_tile(self, idx, category, count):
-        icon = make_photo(folder_icon_png(ICON_SIZE), self._photos)
-        if icon:
-            btn = tk.Button(self.grid_frame,
-                            image=icon, text=f"{short_name(category)}\n({count})",
-                            compound="top", font=("Microsoft YaHei", 9),
-                            width=TILE_SIZE, height=TILE_H, relief="flat",
-                            bg="#dfe7f5", activebackground="#c9d7ef",
-                            command=lambda: self._open_category(category))
+        """手机桌面式文件夹磁贴：在磁贴上直接预览分类里的前 9 个图标。"""
+        inner = [i for i in self.items if i.category == category]
+        previews = inner[:MAX_PREVIEW]
+
+        frame = tk.Frame(self.grid_frame, width=TILE_SIZE, height=TILE_H,
+                         bg=FOLDER_BG, highlightthickness=0)
+        frame.grid_propagate(False)
+        frame.grid(row=idx // COLS, column=idx % COLS, padx=8, pady=8)
+
+        canvas = tk.Canvas(frame, width=FOLDER_PREVIEW, height=FOLDER_PREVIEW,
+                           bg=FOLDER_BG, highlightthickness=0)
+        canvas.pack(pady=(6, 0))
+        rounded_rect(canvas, 1, 1, FOLDER_PREVIEW - 1, FOLDER_PREVIEW - 1,
+                     r=12, fill=FOLDER_PANEL, outline="#c9d7ef")
+
+        if previews:
+            for i, item in enumerate(previews):
+                row, col = divmod(i, PREVIEW_COLS)
+                x = PREVIEW_PAD + col * (PREVIEW_ICON + PREVIEW_GAP) + PREVIEW_ICON // 2
+                y = PREVIEW_PAD + row * (PREVIEW_ICON + PREVIEW_GAP) + PREVIEW_ICON // 2
+                mini = self._mini_icon(item.path)
+                if mini:
+                    canvas.create_image(x, y, image=mini)
+                else:  # 拿不到图标时的占位块
+                    canvas.create_rectangle(x - PREVIEW_ICON // 2 + 2, y - PREVIEW_ICON // 2 + 2,
+                                            x + PREVIEW_ICON // 2 - 2, y + PREVIEW_ICON // 2 - 2,
+                                            fill="#e5e5ea", outline="#d0d0d8")
         else:
-            btn = tk.Button(self.grid_frame,
-                            text=f"📁\n{category}\n({count})",
-                            font=("Microsoft YaHei", 10),
-                            width=11, height=5, relief="flat",
-                            bg="#dfe7f5", activebackground="#c9d7ef",
-                            command=lambda: self._open_category(category))
-        btn.grid(row=idx // COLS, column=idx % COLS, padx=8, pady=8)
-        menu = tk.Menu(btn, tearoff=0)
+            canvas.create_text(FOLDER_PREVIEW // 2, FOLDER_PREVIEW // 2,
+                               text="空", fill="#a3a3ad",
+                               font=("Microsoft YaHei", 12, "bold"))
+
+        label = tk.Label(frame, text=f"{short_name(category)} ({count})",
+                         bg=FOLDER_BG, fg="#333333",
+                         font=("Microsoft YaHei", 9), cursor="hand2")
+        label.pack(pady=(4, 0))
+
+        menu = tk.Menu(frame, tearoff=0)
         menu.add_command(label="删除此分类",
                          command=lambda: self._delete_category(category))
-        btn.bind("<Button-3>", lambda e, m=menu: m.tk_popup(e.x_root, e.y_root))
+
+        open_cmd = lambda e=None: self._open_category(category)
+        popup = lambda e: menu.tk_popup(e.x_root, e.y_root)
+        enter = lambda e: self._hover_tile(frame, (canvas, label), FOLDER_BG_HOVER)
+        leave = lambda e: self._hover_tile(frame, (canvas, label), FOLDER_BG)
+        for w in (frame, canvas, label):
+            w.bind("<Button-1>", open_cmd)
+            w.bind("<Button-3>", popup)
+            w.bind("<Enter>", enter)
+            w.bind("<Leave>", leave)
+
+    def _mini_icon(self, path: str):
+        """取某个路径图标的缩略版（20×20）PhotoImage。"""
+        return make_photo(icon_png(path, PREVIEW_ICON), self._photos)
+
+    @staticmethod
+    def _hover_tile(frame, children, color):
+        frame.configure(bg=color)
+        for w in children:
+            w.configure(bg=color)
 
     def _make_item_tile(self, idx, item):
         icon = make_photo(icon_png(item.path, ICON_SIZE), self._photos)
