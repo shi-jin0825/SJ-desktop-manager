@@ -89,12 +89,15 @@ def _ensure_com():
 
 
 def _png_from_bgra(buf: bytes, w: int, h: int) -> bytes:
-    """把 BGRA 像素流编码为带 alpha 通道的 PNG。"""
+    """把 BGRA 像素流编码为 RGBA 的 PNG（Windows 位图是 BGRA，需交换 R/B 通道）。"""
     stride = w * 4
     raw = bytearray()
     for y in range(h):
+        row = buf[y * stride:(y + 1) * stride]
         raw.append(0)  # filter type 0
-        raw += buf[y * stride:(y + 1) * stride]
+        for x in range(w):
+            b, g, r, a = row[x * 4:x * 4 + 4]
+            raw += bytes((r, g, b, a))
 
     def chunk(tag: bytes, data: bytes) -> bytes:
         body = tag + data
