@@ -28,9 +28,9 @@ import tkinter as tk
 #  可调参数
 # ==========================================================================
 
-PET_SIZE = 160               # 宠物显示尺寸（像素）
+PET_SIZE = 100               # 宠物显示尺寸（像素，改这里就能大/小）
 
-FLOAT_AMPLITUDE = 12         # ★浮动幅度：向上/向下各移动多少像素（0 = 静止）
+FLOAT_AMPLITUDE = 8          # ★浮动幅度：向上/向下各移动多少像素（0 = 静止）
 FLOAT_PERIOD = 4.0           # ★浮动速度：完成一次「上→下→上」的秒数
                              #            数值越大 = 游得越慢
                              #            2.0 轻快 / 4.0 悠闲 / 8.0 慢悠悠
@@ -368,11 +368,11 @@ class DesktopPet(tk.Toplevel):
                                    not self._full_through))
         self._menu.add_separator()
         self._menu.add_command(label="浮动：慢悠悠",
-                               command=lambda: self.set_speed(8.0, 12))
+                               command=lambda: self.set_speed(8.0, 8))
         self._menu.add_command(label="浮动：悠闲",
-                               command=lambda: self.set_speed(4.0, 12))
+                               command=lambda: self.set_speed(4.0, 8))
         self._menu.add_command(label="浮动：轻快",
-                               command=lambda: self.set_speed(2.0, 10))
+                               command=lambda: self.set_speed(2.0, 6))
         self._menu.add_command(label="浮动：静止",
                                command=lambda: self.set_speed(4.0, 0))
         self._menu.add_separator()
