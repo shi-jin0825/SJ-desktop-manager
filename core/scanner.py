@@ -3,6 +3,25 @@
 import os
 from dataclasses import dataclass, field
 
+if os.name == "nt":
+    import ctypes
+
+    _FILE_ATTRIBUTE_HIDDEN = 0x2
+    _FILE_ATTRIBUTE_SYSTEM = 0x4
+
+    def _is_hidden(path: str) -> bool:
+        """Windows 下判断是否为隐藏/系统文件（如 desktop.ini）。"""
+        try:
+            attrs = ctypes.windll.kernel32.GetFileAttributesW(path)
+        except Exception:
+            return False
+        if attrs == -1:  # INVALID_FILE_ATTRIBUTES
+            return False
+        return bool(attrs & (_FILE_ATTRIBUTE_HIDDEN | _FILE_ATTRIBUTE_SYSTEM))
+else:
+    def _is_hidden(path: str) -> bool:
+        return os.path.basename(path).startswith(".")
+
 
 @dataclass
 class DesktopItem:
@@ -41,6 +60,8 @@ def scan_desktop() -> list:
             if entry.name in seen:
                 continue
             seen.add(entry.name)
+            if _is_hidden(entry.path):
+                continue
             if entry.name.lower().endswith((".lnk", ".url")):
                 kind = "shortcut"
             elif entry.is_dir():

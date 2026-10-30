@@ -36,7 +36,7 @@ class CategoryWindow(tk.Toplevel):
         self.geometry("560x400")
         self.configure(bg="#f2f2f7")
         self.category = category
-        self.config = config
+        self.cfg = config
         self.on_change = on_change
 
         tk.Label(self, text=f"📁 {category}（{len(items)} 项）",
@@ -63,6 +63,13 @@ class CategoryWindow(tk.Toplevel):
             menu.add_command(label="移出分类",
                              command=lambda n=item.name: self._remove(n))
             btn.bind("<Button-3>", lambda e, m=menu: m.tk_popup(e.x_root, e.y_root))
+
+    def _remove(self, item_name: str):
+        """把项目移出当前分类，并同步刷新主窗口。"""
+        self.cfg.unassign(item_name)
+        if self.on_change:
+            self.on_change()
+        self.destroy()
 
 
 class App(tk.Tk):
