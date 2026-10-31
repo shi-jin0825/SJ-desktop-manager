@@ -16,9 +16,12 @@ from tkinter import messagebox
 
 from core.config import ConfigManager
 from core.icons import icon_png  # noqa: F401（保持与旧引用兼容）
+from core import hotkey
 from gui.theme import DEFAULT_THEME, THEMES, THEME_NAMES, get_theme
 from gui.pages import PAGE_BY_KEY, DesktopPage
-from gui.widgets import center_window, load_image_file, hline
+from gui.navicons import IconLabel
+from gui.widgets import (center_window, load_image_file, hline, ModernButton,
+                         RoundedEntry)
 
 APP_TITLE = "墨墨桌面管理助手"
 SIDEBAR_W = 208      # 展开宽度
@@ -28,15 +31,18 @@ WIN_W, WIN_H = 1120, 700
 ASSETS = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                       "assets")
 
-# 导航菜单：(页面 key, 图标, 名称)
+# 导航菜单：(页面 key, 线性图标名, 名称) —— 图标统一由 gui/navicons.py 绘制
 NAV_ITEMS = (
-    ("home", "🏠", "首页"),
-    ("categories", "🗂", "分类管理"),
-    ("stats", "📊", "数据统计"),
-    ("system", "📈", "系统监控"),
-    ("countdowns", "⏳", "专属倒计时"),
-    ("settings", "⚙", "设置"),
+    ("home", "home", "首页"),
+    ("categories", "grid", "分类管理"),
+    ("stats", "chart", "数据统计"),
+    ("system", "monitor", "系统监控"),
+    ("countdowns", "clock", "专属倒计时"),
+    ("settings", "gear", "设置"),
 )
+
+MOD_LABEL = ((hotkey.MOD_WIN, "Win"), (hotkey.MOD_CONTROL, "Ctrl"),
+             (hotkey.MOD_ALT, "Alt"), (hotkey.MOD_SHIFT, "Shift"))
 
 
 class App(tk.Tk):
@@ -56,6 +62,10 @@ class App(tk.Tk):
         self.current_key = "home"
         self.current_page = None
         self._photos = []           # 头像等图片引用，防止被回收
+        self.query = ""             # 全局搜索关键字（空 = 不过滤）
+        self.search_entry = None
+        self._hidden = False        # 被全局热键隐藏
+        self.hk = hotkey.GlobalHotkey()
 
         try:
             from core import sysinfo as _sysinfo
@@ -74,6 +84,80 @@ class App(tk.Tk):
         self.bind("<F5>", self._on_f5)
         self.bind_all("<MouseWheel>", self._on_wheel)
         self.protocol("WM_DELETE_WINDOW", self._quit)
+        self._init_hotkey()
+
+    # ---------------- 全局热键 ----------------
+    def _init_hotkey(self):
+        """按配置注册全局热键，并开始轮询（每 200ms 看一次）。"""
+        enabled = bool(self.config_mgr.get_setting("hotkey_enabled", True))
+        if not enabled:
+            self.hk.unregister()
+            return
+        mod = int(self.config_mgr.get_setting("hotkey_mod", hotkey.DEFAULT_HOTKEY[0]) or 0)
+        vk = int(self.config_mgr.get_setting("hotkey_vk", hotkey.DEFAULT_HOTKEY[1]) or 0)
+        self.hk_auto = ""
+        try:
+            hwnd = int(self.winfo_id())
+        except Exception:
+            hwnd = None
+        if not self.hk.register(mod, vk, hwnd):
+            # 组合被别的程序占了：自动换一个能用的（并写回配置，界面显示一致）
+            for m, v in hotkey.HOTKEY_FALLBACKS:
+                if (m, v) == (mod, vk):
+                    continue
+                if self.hk.register(m, v, hwnd):
+                    self.config_mgr.set_setting("hotkey_mod", m)
+                    self.config_mgr.set_setting("hotkey_vk", v)
+                    self.hk_auto = ("「%s」被其它程序占用，已自动改用「%s」"
+                                    % (hotkey.combo_text(mod, vk),
+                                       hotkey.combo_text(m, v)))
+                    break
+        if not getattr(self, "_hotkey_polling", False):
+            self._hotkey_polling = True     # 轮询链只启动一次
+            self.after(200, self._hotkey_poll)
+
+    def _hotkey_poll(self):
+        try:
+            if self.hk.poll():
+                self.toggle_window()
+        except Exception:
+            pass
+        self.after(200, self._hotkey_poll)
+
+    def hotkey_text(self) -> str:
+        """当前热键的可读文本（供设置页显示）。"""
+        if not self.config_mgr.get_setting("hotkey_enabled", True):
+            return "（已关闭）"
+        mod = int(self.config_mgr.get_setting("hotkey_mod", hotkey.DEFAULT_HOTKEY[0]) or 0)
+        vk = int(self.config_mgr.get_setting("hotkey_vk", hotkey.DEFAULT_HOTKEY[1]) or 0)
+        return hotkey.combo_text(mod, vk) or "（未设置）"
+
+    def reload_hotkey(self):
+        """设置页改完热键后重新注册。"""
+        self.hk.unregister()
+        self._init_hotkey()
+
+    def toggle_window(self):
+        """热键：一键呼出 / 隐藏主窗口。"""
+        if self._hidden or str(self.state()) == "withdrawn":
+            self.deiconify()
+            self.lift()
+            try:
+                self.attributes("-topmost", True)
+                self.after(200, lambda: self.attributes("-topmost", False))
+            except tk.TclError:
+                pass
+            self.focus_force()
+            self._hidden = False
+        else:
+            self._hidden = True
+            self.withdraw()
+            pet = getattr(self, "_pet", None)
+            if pet is not None:
+                try:
+                    pet._bubble.say(f"按 {self.hotkey_text()} 可以随时叫我回来～", 4000)
+                except Exception:
+                    pass
 
     def _set_icon(self):
         ico = os.path.join(ASSETS, "momo.ico")
@@ -120,7 +204,8 @@ class App(tk.Tk):
         self.sidebar.pack_propagate(False)
 
         self._build_user_block()
-        hline(self.sidebar, c["divider"], padx=12, pady=(4, 8))
+        self._build_search()
+        hline(self.sidebar, c["divider"], padx=12, pady=(8, 6))
         self._nav_buttons()
         self._build_footer()
 
@@ -147,6 +232,72 @@ class App(tk.Tk):
                      fg=c["sidebar_muted"], font=("Microsoft YaHei", 8),
                      anchor="w").pack(fill="x")
 
+    # ---------------- 全局搜索 ----------------
+    def _build_search(self):
+        """导航上方的全局搜索框：输入即过滤首页桌面项 / 分类。"""
+        c = self.C
+        box = tk.Frame(self.sidebar, bg=c["sidebar_bg"])
+        box.pack(fill="x", padx=10, pady=(8, 0))
+
+        if self.collapsed:
+            # 折叠态只放一个放大镜，点它会自动展开侧边栏并聚焦
+            btn = tk.Frame(box, bg=c["search_bg"], height=34, cursor="hand2")
+            btn.pack(fill="x")
+            btn.pack_propagate(False)
+            IconLabel(btn, "search", 17, c["nav_icon"], bg=c["search_bg"]).pack(
+                expand=True)
+            for w in (btn,):
+                w.bind("<Button-1>", lambda e: self._expand_search())
+            box.bind("<Button-1>", lambda e: self._expand_search())
+            return
+
+        self.search_var = tk.StringVar(value=self.query)
+        entry = RoundedEntry(
+            box, c, textvariable=self.search_var, height=34,
+            on_clear=lambda: self._set_query(""),
+            on_return=lambda e: self._open_first_result(),
+            on_escape=lambda e: self._set_query(""))
+        entry.pack(fill="x")
+        self.search_entry = entry
+        self.search_var.trace_add("write", self._on_search_changed)
+
+    def _expand_search(self):
+        if self.collapsed:
+            self.toggle_sidebar()
+        entry = getattr(self, "search_entry", None)
+        if entry is not None:
+            entry.focus_set()
+
+    def _on_search_changed(self, *_):
+        """输入时实时过滤（不重新扫描桌面，避免每敲一个字都卡顿）。"""
+        self._set_query(self.search_var.get())
+
+    def _set_query(self, text: str):
+        q = (text or "").strip()
+        if q == self.query:
+            return
+        self.query = q
+        page = getattr(self, "current_page", None)
+        if self.current_key == "home" and page is not None:
+            page.refresh(rescan=False)
+        else:
+            self._show_page("home")
+
+    def _clear_search(self):
+        if getattr(self, "search_var", None) is not None:
+            self.search_var.set("")
+        self._set_query("")
+
+    def _open_first_result(self):
+        """回车：直接打开搜索结果里的第一项。"""
+        page = getattr(self, "current_page", None)
+        if self.current_key != "home" or page is None:
+            return
+        if not getattr(page, "open_first", None):
+            return
+        if not page.open_first():
+            messagebox.showinfo("搜索", "没有找到匹配的项目～", parent=self)
+
     def _nav_buttons(self):
         """中部导航菜单。"""
         c = self.C
@@ -156,40 +307,94 @@ class App(tk.Tk):
             self._nav_item(nav, key, icon, label)
 
     def _nav_item(self, parent, key, icon, label):
+        """一条导航：线性图标 + 文字，选中项左侧有强调色竖条。"""
         c = self.C
         active = (key == self.current_key)
-        text = icon if self.collapsed else f"{icon}   {label}"
-        btn = tk.Button(parent, text=text,
-                        anchor="center" if self.collapsed else "w",
-                        font=("Microsoft YaHei", 11, "bold" if active else "normal"),
-                        bg=c["sidebar_active"] if active else c["sidebar_bg"],
-                        fg=c["accent"] if active else c["text"],
-                        activebackground=c["sidebar_hover"],
-                        activeforeground=c["accent"],
-                        relief="flat", bd=0, padx=10, pady=9,
-                        command=lambda k=key: self._show_page(k))
-        btn.pack(fill="x", padx=8, pady=2)
-        return btn
+        bg = c["sidebar_active"] if active else c["sidebar_bg"]
+        fg = c["accent"] if active else c["text"]
+        icon_fg = c["accent"] if active else c["nav_icon"]
+
+        item = tk.Frame(parent, bg=bg, cursor="hand2")
+        item.pack(fill="x", padx=8, pady=2)
+        inner = tk.Frame(item, bg=bg, height=38)
+        inner.pack(fill="x")
+        inner.pack_propagate(False)
+
+        if active and not self.collapsed:
+            tk.Frame(inner, bg=c["accent"], width=3).pack(
+                side="left", fill="y", padx=(0, 7))
+        ic = IconLabel(inner, icon, 19, icon_fg, bg=bg)
+        if self.collapsed:
+            ic.place(relx=0.5, rely=0.5, anchor="center")
+            targets = [item, inner, ic]
+        else:
+            ic.pack(side="left", padx=(11, 10))
+            lab = tk.Label(inner, text=label, bg=bg, fg=fg, anchor="w",
+                           font=("Microsoft YaHei", 11,
+                                 "bold" if active else "normal"))
+            lab.pack(side="left", fill="x")
+            targets = [item, inner, ic, lab]
+
+        hover_bg = c["sidebar_active"] if active else c["sidebar_hover"]
+        enter, leave = self._hover_group(targets, bg, hover_bg)
+        for w in targets:
+            w.bind("<Enter>", enter)
+            w.bind("<Leave>", leave)
+            w.bind("<Button-1>", lambda e, k=key: self._show_page(k))
+        return item
+
+    @staticmethod
+    def _hover_group(widgets, normal_bg, hover_bg):
+        """侧边栏菜单项的 hover：整条（含图标 / 文字）一起换底色。"""
+        def paint(color):
+            for w in widgets:
+                try:
+                    w.configure(bg=color)
+                except tk.TclError:
+                    pass
+
+        def enter(e=None):
+            paint(hover_bg)
+
+        def leave(e=None):
+            paint(normal_bg)
+        return enter, leave
 
     def _build_footer(self):
-        """左下角功能键：折叠侧边栏 / 退出。"""
+        """左下角功能键：折叠侧边栏 / 退出（同样是统一线性图标）。"""
         c = self.C
         foot = tk.Frame(self.sidebar, bg=c["sidebar_bg"])
         foot.pack(side="bottom", fill="x", pady=8)
         hline(foot, c["divider"], padx=12, pady=(0, 6))
         for icon, label, cmd in (
-                ("⇔", "折叠侧边栏" if not self.collapsed else "展开侧边栏",
+                ("collapse", "折叠侧边栏" if not self.collapsed else "展开侧边栏",
                  self.toggle_sidebar),
-                ("⏻", "退出", self._quit)):
-            text = icon if self.collapsed else f"{icon}   {label}"
-            tk.Button(foot, text=text,
-                      anchor="center" if self.collapsed else "w",
-                      font=("Microsoft YaHei", 10),
-                      bg=c["sidebar_bg"], fg=c["sidebar_muted"],
-                      activebackground=c["sidebar_hover"],
-                      activeforeground=c["text"],
-                      relief="flat", bd=0, padx=10, pady=7,
-                      command=cmd).pack(fill="x", padx=8, pady=2)
+                ("power", "退出", self._quit)):
+            item = tk.Frame(foot, bg=c["sidebar_bg"], cursor="hand2")
+            item.pack(fill="x", padx=8, pady=2)
+            inner = tk.Frame(item, bg=c["sidebar_bg"], height=34)
+            inner.pack(fill="x")
+            inner.pack_propagate(False)
+            ic = IconLabel(inner, icon, 17, c["nav_icon"], bg=c["sidebar_bg"])
+            if self.collapsed:
+                ic.place(relx=0.5, rely=0.5, anchor="center")
+                targets = [item, inner, ic]
+            else:
+                ic.pack(side="left", padx=(12, 10))
+                lab = tk.Label(inner, text=label, bg=c["sidebar_bg"],
+                               fg=c["sidebar_muted"], anchor="w",
+                               font=("Microsoft YaHei", 10))
+                lab.pack(side="left", fill="x")
+                targets = [item, inner, ic, lab]
+            enter, leave = self._hover_group(targets, c["sidebar_bg"],
+                                             c["sidebar_hover"])
+            normal_fg = c["nav_icon"]
+            for w in targets:
+                w.bind("<Enter>", enter)
+                w.bind("<Leave>", leave)
+                w.bind("<Button-1>", lambda e, f=cmd: f())
+            ic.bind("<Enter>", lambda e, i=ic: i.set_color(c["text"]))
+            ic.bind("<Leave>", lambda e, i=ic: i.set_color(normal_fg))
 
     # ---------------- 页面路由 ----------------
     def _show_page(self, key: str):
@@ -378,6 +583,10 @@ class App(tk.Tk):
 
     def _quit(self):
         if messagebox.askyesno("退出", f"确定要退出{APP_TITLE}吗？"):
+            try:
+                self.hk.unregister()
+            except Exception:
+                pass
             if self.pet_active():
                 try:
                     self._pet.on_close()

@@ -14,19 +14,22 @@ from core.scanner import scan_desktop, get_desktop_paths
 from core.icons import icon_png
 from core import sysinfo
 from core import countdown as cd
+from core import hotkey
 from gui.theme import (DEFAULT_THEME, THEMES, THEME_NAMES, get_theme, style_menu)
 from gui.widgets import (open_target, make_photo, rounded_rect, short_name,
-                         center_window, hline, stat_bar, shrink)
+                         center_window, hline, stat_bar, shrink,
+                         ModernButton, hover_card)
 
 # ---- 磁贴尺寸 ----
 TILE_SIZE = 96      # 单元格宽度（px）
-TILE_H = 100        # 单元格高度（px）
+TILE_H = 108        # 单元格高度（px）（磁贴统一尺寸，hover 放大不会推挤邻居）
 COLS = 8            # 默认每行数量（窗口宽度变化时会自适应）
 MIN_COLS = 4        # 每行最少数量
 MAX_COLS = 16       # 每行最多数量（窗口放大时自动增加）
 TILE_PADX = 8
 TILE_PADY = 8
 ICON_SIZE = 48      # 磁贴图标尺寸（px）
+TILE_HOVER = 6      # 鼠标悬停时磁贴放大的像素数
 
 # ---- 分类文件夹 3×3 预览 ----
 FOLDER_PREVIEW = 70
@@ -121,17 +124,23 @@ class BasePage(tk.Frame):
     def refresh(self):
         pass
 
-    def _toolbar(self, buttons):
-        """页面顶部的一条操作按钮（(文字, 命令) 列表）。"""
+    def _toolbar(self, buttons, primary=None):
+        """页面顶部的一条胶囊渐变按钮（(文字, 命令) 或 (图标, 文字, 命令)）。
+
+        primary 传文字时，那个按钮会用强调色渐变（视觉主操作）。
+        """
         c = self.C
         bar = tk.Frame(self, bg=c["app_bg"])
         bar.pack(fill="x", padx=16, pady=(12, 6))
-        for text, cmd in buttons:
-            tk.Button(bar, text=text, font=("Microsoft YaHei", 10),
-                      relief="flat", bg=c["panel_bg"], fg=c["text"],
-                      padx=12, pady=4, activebackground=c["panel_active"],
-                      activeforeground=c["text"], bd=0,
-                      command=cmd).pack(side="left", padx=(0, 8))
+        for item in buttons:
+            icon = None
+            if len(item) == 3:
+                icon, text, cmd = item
+            else:
+                text, cmd = item
+            btn = ModernButton(bar, text=text, command=cmd, c=c, icon=icon,
+                               primary=(text == primary))
+            btn.pack(side="left", padx=(0, 10))
         return bar
 
 
@@ -140,7 +149,7 @@ class BasePage(tk.Frame):
 # ======================================================================
 class DesktopPage(BasePage):
     key = "home"
-    title = "🏠 桌面首页"
+    title = "桌面首页"
     subtitle = "像手机桌面一样管理你的桌面图标"
 
     def __init__(self, master, app):
@@ -154,13 +163,13 @@ class DesktopPage(BasePage):
     def _build(self):
         c = self.C
         self._toolbar([
-            ("🔄 刷新 (F5)", self.refresh),
-            ("📂 新建分类", self._add_category),
-            ("🗂 管理分类", self._manage_categories),
-            ("🖥 打开桌面", self._open_desktop),
-            ("🐙 桌面宠物" if not self.app.pet_active() else "🐙 收起宠物",
+            ("refresh", "刷新 (F5)", self.refresh),
+            ("folder", "新建分类", self._add_category),
+            ("grid", "管理分类", self._manage_categories),
+            ("monitor", "打开桌面", self._open_desktop),
+            ("pet", "桌面宠物" if not self.app.pet_active() else "收起宠物",
              self._pet_cmd),
-        ])
+        ], primary="新建分类")
         container = tk.Frame(self, bg=c["app_bg"])
         container.pack(fill="both", expand=True, padx=16, pady=(0, 12))
         self.canvas = tk.Canvas(container, bg=c["app_bg"], highlightthickness=0)
@@ -259,37 +268,101 @@ class DesktopPage(BasePage):
                 bg=self.C["scroll_thumb_active"] if on else self.C["scroll_thumb"])
 
     # ---- 渲染 ----
-    def refresh(self):
+    def refresh(self, rescan=True):
         for w in self.grid_frame.winfo_children():
             w.destroy()
         self._photos = []
-        self.items = scan_desktop()
+        if rescan or not self.items:
+            self.items = scan_desktop()
         for item in self.items:
             item.category = self.cfg.get_category(item.name)
+
+        # 全局搜索：按名称 / 分类过滤（搜索时不重新扫描桌面，避免卡顿）
+        query = (getattr(self.app, "query", "") or "").strip().lower()
+        items = self.items
+        if query:
+            items = [i for i in items
+                     if query in (i.name or "").lower()
+                     or query in (i.display_name or "").lower()
+                     or query in (i.category or "").lower()]
+        categories = [cat for cat in self.cfg.categories
+                      if not query or query in cat.lower()
+                      or any(i.category == cat for i in items)]
 
         w = self.canvas.winfo_width()
         if w > 1:
             self.canvas.itemconfigure(self._grid_win, width=w)
             self.cols = self._cols_for_width(w)
 
-        categories = self.cfg.categories
-        total = len(categories) + sum(1 for i in self.items if not i.category)
+        total = len(categories) + sum(1 for i in items if not i.category)
         cols = self.cols
         self._configure_columns(cols)
 
+        if total == 0 and query:
+            box = tk.Frame(self.grid_frame, bg=self.C["app_bg"])
+            box.pack(pady=60)
+            tk.Label(box, text="🔍", bg=self.C["app_bg"], fg=self.C["text"],
+                     font=("Microsoft YaHei", 28)).pack()
+            tk.Label(box, text=f"没有找到与「{self.app.query}」匹配的项目",
+                     bg=self.C["app_bg"], fg=self.C["sidebar_muted"],
+                     font=("Microsoft YaHei", 11)).pack(pady=(6, 0))
+            self._on_grid_configure()
+            self.app.update_topbar(f"搜索「{self.app.query}」· 0 个结果")
+            return
+
         idx = 0
         for cat in categories:
-            count = sum(1 for i in self.items if i.category == cat)
+            count = sum(1 for i in items if i.category == cat)
             row, col = self._cell(idx, cols, total)
             self._make_folder_tile(row, col, cat, count)
             idx += 1
-        for item in self.items:
+        for item in items:
             if not item.category:
                 row, col = self._cell(idx, cols, total)
                 self._make_item_tile(row, col, item)
                 idx += 1
         self._on_grid_configure()
-        self.app.update_topbar(self.subtitle + f" · 共 {len(self.items)} 项")
+        if query:
+            self.app.update_topbar(f"搜索「{self.app.query}」· {total} 个结果"
+                                   f"（共 {len(self.items)} 项）")
+        else:
+            self.app.update_topbar(self.subtitle + f" · 共 {len(self.items)} 项")
+
+    def open_first(self):
+        """回车：打开搜索结果里的第一个（分类窗口 / 直接启动）。"""
+        query = (getattr(self.app, "query", "") or "").strip().lower()
+        if not query:
+            return False
+        for cat in self.cfg.categories:
+            if query in cat.lower():
+                self._open_category(cat)
+                return True
+        for item in self.items:
+            if (query in (item.name or "").lower()
+                    or query in (item.display_name or "").lower()
+                    or query in (item.category or "").lower()):
+                if item.category:
+                    self._open_category(item.category)
+                else:
+                    open_target(item.path)
+                return True
+        return False
+
+    def _slot(self, row, col):
+        """固定尺寸的槽位：磁贴在里面居中，hover 放大时不会推动邻居。"""
+        slot = tk.Frame(self.grid_frame,
+                        width=TILE_SIZE + TILE_PADX * 2,
+                        height=TILE_H + TILE_PADY * 2, bg=self.C["app_bg"])
+        slot.grid_propagate(False)
+        slot.grid(row=row, column=col)
+        return slot
+
+    def _shadow(self, slot):
+        """磁贴下方那一层「淡阴影」，hover 时才显形。"""
+        sh = tk.Frame(slot, width=TILE_SIZE + TILE_HOVER, bg=self.C["app_bg"],
+                      height=TILE_H + TILE_HOVER)
+        sh.place(relx=0.5, rely=0.5, anchor="center", y=3)
+        return sh
 
     def _mini_icon(self, path: str):
         """文件夹预览用的小图标：系统可能返回比请求大的图，缩到预览尺寸。"""
@@ -307,10 +380,13 @@ class DesktopPage(BasePage):
         inner = [i for i in self.items if i.category == category]
         previews = inner[:MAX_PREVIEW]
 
-        frame = tk.Frame(self.grid_frame, width=TILE_SIZE, height=TILE_H,
+        slot = self._slot(row, col)
+        shadow = self._shadow(slot)
+        frame = tk.Frame(slot, width=TILE_SIZE, height=TILE_H,
                          bg=c["folder_bg"], highlightthickness=0)
-        frame.grid_propagate(False)
-        frame.grid(row=row, column=col, padx=TILE_PADX, pady=TILE_PADY)
+        frame.pack_propagate(False)      # 磁贴尺寸固定，内容不把它撑变形
+        frame.place(relx=0.5, rely=0.5, anchor="center",
+                    width=TILE_SIZE, height=TILE_H)
 
         canvas = tk.Canvas(frame, width=FOLDER_PREVIEW, height=FOLDER_PREVIEW,
                            bg=c["folder_bg"], highlightthickness=0)
@@ -338,7 +414,8 @@ class DesktopPage(BasePage):
 
         label = tk.Label(frame, text=f"{short_name(category)} ({count})",
                          bg=c["folder_bg"], fg=c["text"],
-                         font=("Microsoft YaHei", 9), cursor="hand2")
+                         font=("Microsoft YaHei", 9), cursor="hand2",
+                         wraplength=TILE_SIZE - 10, justify="center")
         label.pack(pady=(4, 0))
 
         menu = tk.Menu(frame, tearoff=0)
@@ -353,8 +430,9 @@ class DesktopPage(BasePage):
 
         open_cmd = lambda e=None: self._open_category(category)
         popup = lambda e: menu.tk_popup(e.x_root, e.y_root)
-        enter = lambda e: self._hover_tile(frame, (canvas, label), c["folder_bg_hover"])
-        leave = lambda e: self._hover_tile(frame, (canvas, label), c["folder_bg"])
+        enter, leave = hover_card(frame, (canvas, label), c,
+                                  c["folder_bg"], c["folder_bg_hover"],
+                                  grow=TILE_HOVER, shadow=shadow, slot=slot)
         for w in (frame, canvas, label):
             w.bind("<Button-1>", open_cmd)
             w.bind("<Button-3>", popup)
@@ -363,9 +441,11 @@ class DesktopPage(BasePage):
 
     def _make_item_tile(self, row, col, item):
         c = self.C
+        slot = self._slot(row, col)
+        shadow = self._shadow(slot)
         icon = make_photo(icon_png(item.path, ICON_SIZE), self._photos)
         if icon:
-            btn = tk.Button(self.grid_frame,
+            btn = tk.Button(slot,
                             image=icon, text=short_name(item.display_name),
                             compound="top", font=("Microsoft YaHei", 9),
                             width=TILE_SIZE, height=TILE_H, relief="flat",
@@ -374,16 +454,21 @@ class DesktopPage(BasePage):
                             activeforeground=c["text"],
                             command=lambda p=item.path: open_target(p))
         else:
+            # 取不到系统图标时用 emoji 顶上；放一张透明图，让宽高按像素解释
             emoji = {"dir": "🗂", "shortcut": "🧩", "file": "📄"}.get(item.kind, "📄")
-            btn = tk.Button(self.grid_frame,
-                            text=f"{emoji}\n{short_name(item.display_name)}",
-                            font=("Microsoft YaHei", 9),
-                            width=11, height=5, relief="flat",
+            blank = tk.PhotoImage(width=ICON_SIZE, height=ICON_SIZE)
+            self._photos.append(blank)
+            btn = tk.Button(slot,
+                            image=blank, text=f"{emoji}\n"
+                                              f"{short_name(item.display_name)}",
+                            compound="top", font=("Microsoft YaHei", 9),
+                            width=TILE_SIZE, height=TILE_H, relief="flat",
                             bg=c["panel_bg"], fg=c["text"],
                             activebackground=c["panel_active"],
                             activeforeground=c["text"],
                             command=lambda p=item.path: open_target(p))
-        btn.grid(row=row, column=col, padx=TILE_PADX, pady=TILE_PADY)
+        btn.place(relx=0.5, rely=0.5, anchor="center",
+                  width=TILE_SIZE, height=TILE_H)
         menu = tk.Menu(btn, tearoff=0)
         for cat in self.cfg.categories:
             menu.add_command(label=f"移入「{cat}」",
@@ -392,6 +477,10 @@ class DesktopPage(BasePage):
         menu.add_command(label="移出当前分类", command=lambda: self._unassign(item.name))
         style_menu(menu, c)
         btn.bind("<Button-3>", lambda e, m=menu: m.tk_popup(e.x_root, e.y_root))
+        enter, leave = hover_card(btn, (), c, c["panel_bg"], c["panel_active"],
+                                  grow=TILE_HOVER, shadow=shadow, slot=slot)
+        btn.bind("<Enter>", enter)
+        btn.bind("<Leave>", leave)
 
     # ---- 动作 ----
     def _open_category(self, category):
@@ -517,18 +606,15 @@ class DesktopPage(BasePage):
 
         bar = tk.Frame(win, bg=c["dialog_bg"])
         bar.pack(fill="x", padx=12, pady=8)
-        for text, cmd in (("➕ 新建", do_add), ("✏️ 重命名", do_rename),
-                          ("🗑 删除", do_delete)):
-            tk.Button(bar, text=text, font=("Microsoft YaHei", 9),
-                      relief="flat", bg=c["panel_bg"], fg=c["text"],
-                      activebackground=c["panel_active"],
-                      activeforeground=c["text"], padx=8, pady=4, bd=0,
-                      command=cmd).pack(side="left", padx=3)
-        tk.Button(bar, text="关闭", font=("Microsoft YaHei", 9), relief="flat",
-                  bg=c["panel_bg"], fg=c["text"],
-                  activebackground=c["panel_active"],
-                  activeforeground=c["text"], padx=10, pady=4, bd=0,
-                  command=win.destroy).pack(side="right")
+        for icon, text, cmd, primary in (
+                ("folder", "新建", do_add, True),
+                ("gear", "重命名", do_rename, False),
+                ("close", "删除", do_delete, False)):
+            ModernButton(bar, text=text, command=cmd, c=c, icon=icon,
+                         primary=primary, height=30, padx=13).pack(
+                side="left", padx=4)
+        ModernButton(bar, text="关闭", command=win.destroy, c=c,
+                     height=30).pack(side="right")
 
         lst.bind("<Double-Button-1>", lambda e: do_rename())
         reload()
@@ -543,13 +629,13 @@ class DesktopPage(BasePage):
 # ======================================================================
 class CategoriesPage(BasePage):
     key = "categories"
-    title = "🗂 分类管理"
+    title = "分类管理"
     subtitle = "新建、重命名、删除分类，并查看每个分类里的内容"
 
     def _build(self):
         c = self.C
-        self._toolbar([("➕ 新建分类", self._add),
-                       ("🔄 刷新", self.refresh)])
+        self._toolbar([("folder", "新建分类", self._add),
+                       ("refresh", "刷新", self.refresh)], primary="新建分类")
         self.body = tk.Frame(self, bg=c["app_bg"])
         self.body.pack(fill="both", expand=True, padx=16, pady=(0, 12))
         self.refresh()
@@ -653,11 +739,11 @@ class CategoriesPage(BasePage):
 # ======================================================================
 class StatsPage(BasePage):
     key = "stats"
-    title = "📊 数据统计"
+    title = "数据统计"
     subtitle = "桌面整理情况的概览"
 
     def _build(self):
-        self._toolbar([("🔄 刷新", self.refresh)])
+        self._toolbar([("refresh", "刷新", self.refresh)])
         self.body = tk.Frame(self, bg=self.C["app_bg"])
         self.body.pack(fill="both", expand=True, padx=16, pady=(0, 12))
         self.refresh()
@@ -733,7 +819,7 @@ class StatsPage(BasePage):
 # ======================================================================
 class SystemPage(BasePage):
     key = "system"
-    title = "📈 系统监控"
+    title = "系统监控"
     subtitle = "CPU 占用率、内存剩余与实时网速"
     INTERVAL = 1000        # 刷新间隔（毫秒）
     HISTORY = 60           # 折线图保留的采样点数
@@ -745,7 +831,7 @@ class SystemPage(BasePage):
         self._history = []
         self._job = None
 
-        bar = self._toolbar([("🔄 立即刷新", self._tick)])
+        bar = self._toolbar([("refresh", "立即刷新", self._tick)])
         tk.Label(bar, text="每 1 秒自动刷新 · 数据来自 Windows 系统接口",
                  bg=c["app_bg"], fg=c["sidebar_muted"],
                  font=("Microsoft YaHei", 9)).pack(side="left")
@@ -1209,9 +1295,92 @@ class PomodoroDialog(tk.Toplevel):
             self.app.start_pomodoro(minutes, rest)
 
 
+class HotkeyDialog(tk.Toplevel):
+    """按下组合键即可设定全局热键（Ctrl / Alt / Shift + 任意键）。"""
+
+    W, H = 380, 230
+
+    def __init__(self, master, app, on_save=None):
+        super().__init__(master)
+        self.app = app
+        self.on_save = on_save
+        c = self.C = get_theme(getattr(app, "theme_name", DEFAULT_THEME))
+        self.mod = int(app.cfg.get_setting(
+            "hotkey_mod", hotkey.MOD_CONTROL | hotkey.MOD_ALT) or 0)
+        self.vk = int(app.cfg.get_setting("hotkey_vk", ord("M")) or 0)
+        self.title("⌨ 设置全局热键")
+        center_window(self, self.W, self.H, master)
+        self.configure(bg=c["dialog_bg"])
+        self.resizable(False, False)
+
+        tk.Label(self, text="⌨ 自定义全局热键",
+                 font=("Microsoft YaHei", 14, "bold"),
+                 bg=c["dialog_bg"], fg=c["text"]).pack(pady=(14, 4))
+        tk.Label(self, text="直接按下你想要的组合键（例如 Ctrl+Alt+M）",
+                 font=("Microsoft YaHei", 9),
+                 bg=c["dialog_bg"], fg=c["sidebar_muted"]).pack()
+
+        self.var = tk.StringVar(value=hotkey.combo_text(self.mod, self.vk))
+        tk.Label(self, textvariable=self.var,
+                 font=("Consolas", 18, "bold"),
+                 bg=c["panel_bg"], fg=c["accent"], width=18,
+                 pady=8).pack(pady=14)
+        self.hint = tk.Label(self, text="等待按键…", bg=c["dialog_bg"],
+                             fg=c["sidebar_muted"],
+                             font=("Microsoft YaHei", 9))
+        self.hint.pack()
+
+        btns = tk.Frame(self, bg=c["dialog_bg"])
+        btns.pack(pady=(10, 12))
+        ModernButton(btns, text="保存", command=self._save, c=c,
+                     primary=True).pack(side="left", padx=6)
+        ModernButton(btns, text="清除", command=self._clear,
+                     c=c).pack(side="left", padx=6)
+        ModernButton(btns, text="取消", command=self.destroy,
+                     c=c).pack(side="left", padx=6)
+
+        self.bind("<KeyPress>", self._on_key)
+        self.focus_set()
+        try:
+            self.transient(master)
+        except tk.TclError:
+            pass
+        self.grab_set()
+
+    def _on_key(self, e):
+        if e.keysym == "Escape":
+            self.destroy()
+            return
+        mod = 0
+        state = int(getattr(e, "state", 0) or 0)
+        if state & 0x0004:
+            mod |= hotkey.MOD_CONTROL
+        if state & 0x0008 or state & 0x0080:      # Mod1(Alt) / Mod5
+            mod |= hotkey.MOD_ALT
+        if state & 0x0001:
+            mod |= hotkey.MOD_SHIFT
+        vk = int(getattr(e, "keycode", 0) or 0)
+        if not mod or vk in (16, 17, 18, 91, 92, 93):
+            self.hint.config(text="请按住 Ctrl / Alt / Shift 再按一个键")
+            return
+        self.mod, self.vk = mod, vk
+        self.var.set(hotkey.combo_text(mod, vk))
+        self.hint.config(text="已捕获，点「保存」生效")
+
+    def _save(self):
+        self.destroy()
+        if self.on_save is not None:
+            self.on_save(self.mod, self.vk)
+
+    def _clear(self):
+        self.destroy()
+        if self.on_save is not None:
+            self.on_save(0, 0)
+
+
 class CountdownPage(BasePage):
     key = "countdowns"
-    title = "⏳ 专属倒计时"
+    title = "专属倒计时"
     subtitle = "倒数日：记住每一个重要的日子"
     REFRESH_MS = 60000        # 每分钟刷新一次，过零点后自动更新
 
@@ -1221,10 +1390,10 @@ class CountdownPage(BasePage):
 
     def _build(self):
         c = self.C
-        self._toolbar([("➕ 新建倒计时", self._add),
-                       ("🍅 开始番茄钟", self._start_pomo),
-                       ("⏹ 结束番茄钟", self._stop_pomo),
-                       ("🔄 刷新", self.refresh)])
+        self._toolbar([("calendar", "新建倒计时", self._add),
+                       ("clock", "开始番茄钟", self._start_pomo),
+                       ("close", "结束番茄钟", self._stop_pomo),
+                       ("refresh", "刷新", self.refresh)])
         self.body = tk.Frame(self, bg=c["app_bg"])
         self.body.pack(fill="both", expand=True, padx=16, pady=(0, 12))
         self.refresh()
@@ -1456,7 +1625,7 @@ class CountdownPage(BasePage):
 # ======================================================================
 class SettingsPage(BasePage):
     key = "settings"
-    title = "⚙ 设置"
+    title = "设置"
     subtitle = "外观、桌面宠物与侧边栏"
 
     def _build(self):
@@ -1485,12 +1654,11 @@ class SettingsPage(BasePage):
         self._section("桌面宠物")
         pet_row = tk.Frame(self.body, bg=c["app_bg"])
         pet_row.pack(anchor="w", pady=4)
-        pet_text = "🐙 收起宠物" if self.app.pet_active() else "🐙 召唤宠物"
-        pet_btn = tk.Button(pet_row, text=pet_text, font=("Microsoft YaHei", 10),
-                            relief="flat", bg=c["panel_bg"], fg=c["text"],
-                            activebackground=c["panel_active"], bd=0,
-                            padx=12, pady=4, command=lambda: self._pet(pet_btn))
-        pet_btn.pack(side="left")
+        pet_text = "收起宠物" if self.app.pet_active() else "召唤宠物"
+        self._pet_btn = ModernButton(
+            pet_row, text=pet_text, command=lambda: self._pet(self._pet_btn),
+            c=c, icon="pet", primary=not self.app.pet_active())
+        self._pet_btn.pack(side="left")
         tk.Label(pet_row, text="墨墨会悬浮在桌面上：可拖拽抛掷（重力弹跳）、"
                                "点击摸头会开心",
                  bg=c["app_bg"], fg=c["sidebar_muted"],
@@ -1499,7 +1667,7 @@ class SettingsPage(BasePage):
         pomo_row = tk.Frame(self.body, bg=c["app_bg"])
         pomo_row.pack(anchor="w", pady=4)
         running = bool(self.app.pomodoro)
-        pomo_text = "⏹ 结束番茄钟" if running else "🍅 开始番茄钟"
+        pomo_text = "结束番茄钟" if running else "开始番茄钟"
         spin_kw = dict(font=("Microsoft YaHei", 10), width=4, justify="center",
                        relief="flat", bd=0, bg=c["panel_bg"], fg=c["text"],
                        buttonbackground=c["panel_bg"],
@@ -1515,11 +1683,8 @@ class SettingsPage(BasePage):
             self.spin_pomo.pack(side="left")
             tk.Label(pomo_row, text="分钟", bg=c["app_bg"], fg=c["text"],
                      font=("Microsoft YaHei", 9)).pack(side="left", padx=(3, 8))
-        tk.Button(pomo_row, text=pomo_text, font=("Microsoft YaHei", 10),
-                  relief="flat", bg=c["panel_bg"], fg=c["text"],
-                  activebackground=c["panel_active"], bd=0,
-                  padx=12, pady=4,
-                  command=self._toggle_pomodoro).pack(side="left")
+        ModernButton(pomo_row, text=pomo_text, command=self._toggle_pomodoro,
+                     c=c, icon="clock", primary=not running).pack(side="left")
         self.var_pomo_break = tk.IntVar(value=self.app.pomo_break)
         if not running:
             self.spin_pomo_break = tk.Spinbox(
@@ -1550,13 +1715,49 @@ class SettingsPage(BasePage):
                        activeforeground=c["text"],
                        highlightthickness=0, bd=0).pack(side="left")
 
+        self._section("全局热键")
+        hk_top = tk.Frame(self.body, bg=c["app_bg"])
+        hk_top.pack(anchor="w", pady=4)
+        self._hk_var = tk.BooleanVar(
+            value=bool(self.app.cfg.get_setting("hotkey_enabled", True)))
+        tk.Checkbutton(hk_top, text="启用全局热键（窗口隐藏时也能一键呼出）",
+                       variable=self._hk_var, command=self._toggle_hotkey,
+                       font=("Microsoft YaHei", 9),
+                       bg=c["app_bg"], fg=c["text"],
+                       selectcolor=c["panel_bg"],
+                       activebackground=c["app_bg"],
+                       activeforeground=c["text"],
+                       highlightthickness=0, bd=0).pack(side="left")
+
+        hk_row = tk.Frame(self.body, bg=c["app_bg"])
+        hk_row.pack(anchor="w", pady=4)
+        tk.Label(hk_row, text="当前：", bg=c["app_bg"], fg=c["sidebar_muted"],
+                 font=("Microsoft YaHei", 9)).pack(side="left")
+        tk.Label(hk_row, text=self.app.hotkey_text(), bg=c["app_bg"],
+                 fg=c["accent"], font=("Microsoft YaHei", 10, "bold")).pack(
+            side="left", padx=(0, 10))
+        ModernButton(hk_row, text="修改快捷键", command=self._pick_hotkey,
+                     c=c, icon="gear", primary=True).pack(side="left",
+                                                          padx=(0, 8))
+        ModernButton(hk_row, text="恢复默认", command=self._reset_hotkey,
+                     c=c, icon="refresh").pack(side="left")
+
+        state = "按一下就唤出 / 隐藏主界面，不用再去任务栏找"
+        if getattr(self.app, "hk_auto", ""):
+            state = "⚠ " + self.app.hk_auto + "（可在上面手动改）"
+        elif self._hk_var.get() and self.app.hk.error:
+            state = f"⚠ 注册失败：{self.app.hk.error}，请换一个组合试试"
+        elif not self._hk_var.get():
+            state = "已关闭：只能通过任务栏图标打开主界面"
+        tk.Label(self.body, text=state, bg=c["app_bg"], fg=c["sidebar_muted"],
+                 font=("Microsoft YaHei", 9), anchor="w",
+                 justify="left").pack(fill="x", pady=(2, 0))
+
         self._section("侧边栏")
         sb_row = tk.Frame(self.body, bg=c["app_bg"])
         sb_row.pack(anchor="w", pady=4)
-        tk.Button(sb_row, text="⇔ 折叠 / 展开", font=("Microsoft YaHei", 10),
-                  relief="flat", bg=c["panel_bg"], fg=c["text"],
-                  activebackground=c["panel_active"], bd=0, padx=12, pady=4,
-                  command=self.app.toggle_sidebar).pack(side="left")
+        ModernButton(sb_row, text="折叠 / 展开", command=self.app.toggle_sidebar,
+                     c=c, icon="collapse").pack(side="left")
         tk.Label(sb_row, text="折叠后只显示图标，状态会自动记住",
                  bg=c["app_bg"], fg=c["sidebar_muted"],
                  font=("Microsoft YaHei", 9)).pack(side="left", padx=10)
@@ -1592,6 +1793,29 @@ class SettingsPage(BasePage):
             self.app.start_pomodoro(mins, rest)
         self.app._show_page("settings")   # 重建页面以更新按钮文字
 
+    def _pick_hotkey(self):
+        """弹出捕获框：按下组合键即可自定义全局热键。"""
+        HotkeyDialog(self.app, self.app, on_save=self._save_hotkey)
+
+    def _save_hotkey(self, mod, vk):
+        self.app.cfg.set_setting("hotkey_mod", int(mod or 0))
+        self.app.cfg.set_setting("hotkey_vk", int(vk or 0))
+        self.app.reload_hotkey()
+        self.app._show_page("settings")
+
+    def _reset_hotkey(self):
+        # 清掉自定义值，让它回到默认（如果被占用会自动换备用组合）
+        self.app.cfg.settings.pop("hotkey_mod", None)
+        self.app.cfg.settings.pop("hotkey_vk", None)
+        self.app.cfg.save()
+        self.app.reload_hotkey()
+        self.app._show_page("settings")
+
+    def _toggle_hotkey(self):
+        self.app.cfg.set_setting("hotkey_enabled", self._hk_var.get())
+        self.app.reload_hotkey()
+        self.app._show_page("settings")
+
     def _toggle_monitor(self):
         self.app.cfg.set_setting("pet_monitor", self._monitor_var.get())
         pet = getattr(self.app, "_pet", None)
@@ -1605,9 +1829,11 @@ class SettingsPage(BasePage):
     def _pick_theme(self):
         self.app._apply_theme(self.var.get())
 
-    def _pet(self, btn):
+    def _pet(self, btn=None):
+        """召唤 / 收起桌宠，并把按钮文字同步过来。"""
         self.app._toggle_pet()
-        btn.config(text="🐙 收起宠物" if self.app.pet_active() else "🐙 召唤宠物")
+        if btn is not None:
+            btn.set_text("收起宠物" if self.app.pet_active() else "召唤宠物")
 
 
 PAGES = (DesktopPage, CategoriesPage, StatsPage, SystemPage,

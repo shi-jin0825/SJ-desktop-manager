@@ -34,11 +34,19 @@ THEMES = {
         "sidebar_muted": "#8a93a6",      # 侧边栏次要文字（用户名下的说明）
         "accent": "#4b6bfb",             # 强调色（选中态、按钮、统计条）
         "accent_fg": "#ffffff",          # 强调色上的文字
+        "accent_2": "#7d5bf6",           # 强调色渐变另一端（胶囊按钮）
+        "accent_hover": "#5f7bff",       # 强调按钮 hover
+        "accent_2_hover": "#9179f8",
         "divider": "#e6e9f0",            # 分隔线
         "card_bg": "#ffffff",            # 内容区卡片
         "topbar_bg": "#f7f9fc",          # 右侧顶部标题条
         "stat_bar": "#4b6bfb",           # 统计条填充
         "stat_bar_bg": "#e8eefc",        # 统计条底槽
+        # ---- v1.2：卡片阴影 / 磁贴描边 / 搜索框 ----
+        "shadow": "#c3cbdc",             # 磁贴 hover 的淡阴影
+        "tile_border": "#e3e7f0",        # 磁贴默认描边
+        "search_bg": "#f2f5fb",          # 搜索框底色
+        "nav_icon": "#5a6478",           # 侧边栏线性图标（未选中）
     },
     "dark": {
         "app_bg": "#1c1f26",
@@ -67,11 +75,18 @@ THEMES = {
         "sidebar_muted": "#8b93a3",
         "accent": "#6d8bff",
         "accent_fg": "#ffffff",
+        "accent_2": "#9d6bf8",
+        "accent_hover": "#8299ff",
+        "accent_2_hover": "#b184fa",
         "divider": "#2e343f",
         "card_bg": "#262b34",
         "topbar_bg": "#1c1f26",
         "stat_bar": "#6d8bff",
         "stat_bar_bg": "#2f3542",
+        "shadow": "#101319",
+        "tile_border": "#333a47",
+        "search_bg": "#2b303a",
+        "nav_icon": "#a8b0c0",
     },
 }
 
