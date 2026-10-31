@@ -503,6 +503,11 @@ class DesktopPet(tk.Toplevel):
         self._physics_on = cfg.get_setting("pet_physics", True) if cfg else True
         self._sys_state = "idle"
 
+        # ---- 番茄钟 ----
+        self._pomo_showing = False    # 当前气泡是否在显示番茄钟倒计时
+        self._celebrating = False     # 番茄钟结束后短暂的庆祝气泡
+        self._celebrate_until = 0.0
+
         # ---- 气泡 ----
         self._bubble = Bubble(self, self._bubble_colors())
         self._bubble.follow(self.x, self.y)
@@ -653,17 +658,35 @@ class DesktopPet(tk.Toplevel):
         self.after(int(MONITOR_PERIOD_S * 1000), self._monitor_tick)
 
     def _sample(self):
+        now = time.monotonic()
         if self._squash is not None:
             return
-        if time.monotonic() < self._temp_until:
-            return                    # 开心 / 害羞等一次性表情还在播放
 
         pomo = self._pomodoro()
+        # 番茄钟结束或被手动取消：收起倒计时气泡，不再显示剩余时间
+        if not pomo and self._pomo_showing:
+            self._pomo_showing = False
+            if not self._celebrating:
+                self._bubble.hide()
+                self._sys_state = "idle"
+        # 庆祝气泡到点后自动收起，回到日常状态
+        if self._celebrating and now >= self._celebrate_until:
+            self._celebrating = False
+            self._bubble.hide()
+            self._sys_state = "idle"
+            self._set_face("idle")
+
+        if self._celebrating:
+            return                        # 庆祝文案期间保持气泡
+        if time.monotonic() < self._temp_until:
+            return                        # 开心 / 害羞等一次性表情还在播放
+
         if pomo:
             m, s = divmod(max(0, int(pomo["end"] - time.time())), 60)
             self._bubble.say(f"📚 番茄钟 {pomo['minutes']} 分钟\n"
                              f"还剩 {m:02d}:{s:02d}，我陪你学习", 0)
             self._set_face("study")
+            self._pomo_showing = True
             return
 
         if not self._monitor_on:
@@ -707,14 +730,53 @@ class DesktopPet(tk.Toplevel):
         return None
 
     def _start_pomodoro(self):
+        """按用户设置的默认时长开始（右键菜单）。"""
         start = getattr(self._master, "start_pomodoro", None)
         if start:
-            start(45)
+            start(getattr(self._master, "pomo_minutes", 45))
+
+    def _custom_pomodoro(self):
+        """弹出时长设置框：滚轴自定义专注 / 休息分钟数。"""
+        try:
+            from gui.pages import PomodoroDialog
+        except Exception:
+            return
+        try:
+            PomodoroDialog(self, self._master)
+        except Exception:
+            pass
 
     def _stop_pomodoro(self):
         stop = getattr(self._master, "stop_pomodoro", None)
         if stop:
             stop()
+
+    def on_pomodoro_end(self, kind="stop", minutes=0, break_minutes=0):
+        """番茄钟结束 / 被取消：立刻收起头顶的倒计时。
+
+        kind="done" 时先播一句庆祝（8 秒），之后同样不再显示剩余时间。
+        """
+        self._pomo_showing = False
+        if kind == "done":
+            rest = break_minutes or getattr(self._master, "pomo_break", 5)
+            try:
+                self._bubble.say(f"🍅 {minutes} 分钟专注完成！\n"
+                                 f"休息 {rest} 分钟吧～", 8000)
+            except Exception:
+                pass
+            self._celebrating = True
+            self._celebrate_until = time.monotonic() + 8.0
+            self._sys_state = "idle"
+            if "happy" in self._faces:
+                self._set_face("happy")
+            else:
+                self._set_face("idle")
+            return
+        self._celebrating = False
+        self._bubble.hide()
+        self._sys_state = "idle"
+        if time.monotonic() >= self._temp_until:
+            self._set_face("idle")
 
     # ============================ 拖动 / 抛出 ============================
     def _on_press(self, e):
@@ -774,8 +836,10 @@ class DesktopPet(tk.Toplevel):
     # ============================ 菜单 / 设置 ============================
     def _build_menu(self):
         self._menu = tk.Menu(self, tearoff=0)
-        self._menu.add_command(label="🍅 开始番茄钟（45 分钟）",
+        self._menu.add_command(label="🍅 开始番茄钟",
                                command=self._start_pomodoro)
+        self._menu.add_command(label="⏱ 自定义番茄钟时长…",
+                               command=self._custom_pomodoro)
         self._menu.add_command(label="⏹ 结束番茄钟",
                                command=self._stop_pomodoro)
         self._menu.add_separator()
@@ -799,6 +863,14 @@ class DesktopPet(tk.Toplevel):
         self._menu.add_command(label="收起墨墨", command=self.on_close)
 
     def _popup(self, e):
+        # 菜单项文字跟随用户设置的时长
+        try:
+            mins = getattr(self._master, "pomo_minutes", 45)
+            running = bool(getattr(self._master, "pomodoro", None))
+            self._menu.entryconfig(0, label=("⏹ 番茄钟进行中…" if running
+                                             else f"🍅 开始番茄钟（{mins} 分钟）"))
+        except (tk.TclError, AttributeError):
+            pass
         self._menu.tk_popup(e.x_root, e.y_root)
 
     def _cfg_set(self, key, val):

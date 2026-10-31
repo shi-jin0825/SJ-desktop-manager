@@ -269,18 +269,59 @@ class App(tk.Tk):
             self._show_page("settings")
 
     # ---------------- 番茄钟 ----------------
-    def start_pomodoro(self, minutes=45):
-        """开启番茄钟：桌宠进入伴学状态，头顶显示倒计时。"""
+    POMO_MIN, POMO_MAX = 1, 600        # 允许自定义的范围（分钟）
+
+    @property
+    def pomo_minutes(self) -> int:
+        """用户设置的专注时长（分钟）。"""
+        try:
+            v = int(self.cfg.get_setting("pomodoro_minutes", 45))
+        except (TypeError, ValueError):
+            v = 45
+        return max(self.POMO_MIN, min(self.POMO_MAX, v))
+
+    @property
+    def pomo_break(self) -> int:
+        """用户设置的休息时长（分钟）。"""
+        try:
+            v = int(self.cfg.get_setting("pomodoro_break", 5))
+        except (TypeError, ValueError):
+            v = 5
+        return max(self.POMO_MIN, min(self.POMO_MAX, v))
+
+    def set_pomo_minutes(self, minutes, break_minutes=None):
+        """把用户自定义的番茄钟时长写入配置。"""
+        self.cfg.set_setting("pomodoro_minutes", self.pomo_minutes
+                             if minutes is None else
+                             max(self.POMO_MIN, min(self.POMO_MAX, int(minutes))))
+        if break_minutes is not None:
+            self.cfg.set_setting("pomodoro_break", self.pomo_break
+                                 if break_minutes is None else
+                                 max(self.POMO_MIN,
+                                     min(self.POMO_MAX, int(break_minutes))))
+        return self.pomo_minutes
+
+    def start_pomodoro(self, minutes=None, break_minutes=None):
+        """开启番茄钟：桌宠进入伴学状态，头顶显示倒计时。
+
+        minutes 为 None 时使用用户设置好的默认时长。
+        """
         import time as _t
-        self.pomodoro = {"end": _t.time() + minutes * 60, "minutes": minutes}
+        mins = self.pomo_minutes if minutes is None else int(minutes)
+        mins = max(self.POMO_MIN, min(self.POMO_MAX, mins))
+        rest = self.pomo_break if break_minutes is None else int(break_minutes)
+        rest = max(self.POMO_MIN, min(self.POMO_MAX, rest))
+        self.pomodoro = {"end": _t.time() + mins * 60,
+                         "minutes": mins, "break": rest}
         if self._pomo_job:
             try:
                 self.after_cancel(self._pomo_job)
             except Exception:
                 pass
-        self._pomo_job = self.after(minutes * 60 * 1000, self._pomodoro_done)
+        self._pomo_job = self.after(mins * 60 * 1000, self._pomodoro_done)
 
     def stop_pomodoro(self):
+        """手动结束：立刻清掉桌宠头上的倒计时气泡。"""
         self.pomodoro = None
         if self._pomo_job:
             try:
@@ -288,21 +329,38 @@ class App(tk.Tk):
             except Exception:
                 pass
             self._pomo_job = None
+        self._pet_pomodoro_end("stop")
 
     def _pomodoro_done(self):
-        """番茄钟到点：弹窗提醒 + 桌宠气泡庆祝。"""
+        """番茄钟到点：弹窗提醒 + 桌宠气泡庆祝（之后不再显示倒计时）。"""
         self._pomo_job = None
-        mins = (self.pomodoro or {}).get("minutes", 45)
+        info = self.pomodoro or {}
+        mins = info.get("minutes", self.pomo_minutes)
+        rest = info.get("break", self.pomo_break)
         self.pomodoro = None
-        if self.pet_active():
-            try:
-                self._pet._bubble.say("🍅 番茄钟到啦！\n休息 5 分钟吧～", 8000)
-            except Exception:
-                pass
+        self._pet_pomodoro_end("done", mins, rest)
+        self.refresh_pomodoro_ui()
         messagebox.showinfo(
             "🍅 番茄钟结束",
-            f"专注 {mins} 分钟完成！\n\n站起来活动一下，休息 5 分钟吧～",
+            f"专注 {mins} 分钟完成！\n\n站起来活动一下，休息 {rest} 分钟吧～",
             parent=self)
+
+    def _pet_pomodoro_end(self, kind, minutes=0, break_minutes=0):
+        kind = "done" if kind == "done" else "stop"
+        if kind == "done":
+            self.pomodoro = None
+        pet = getattr(self, "_pet", None)
+        if pet is None:
+            return
+        try:
+            pet.on_pomodoro_end(kind, minutes, break_minutes)
+        except Exception:
+            pass
+
+    def refresh_pomodoro_ui(self):
+        """番茄钟状态变化后，刷新可能正在显示的页面（倒计时 / 设置）。"""
+        if self.current_key in ("countdowns", "settings"):
+            self._show_page(self.current_key)
 
     # ---------------- 事件 ----------------
     def _on_f5(self, event=None):

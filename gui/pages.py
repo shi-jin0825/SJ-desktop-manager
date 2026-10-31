@@ -1080,6 +1080,135 @@ class CountdownDialog(tk.Toplevel):
         self.destroy()
 
 
+# ---- 番茄钟 ----
+POMO_PRESETS = (15, 25, 45, 60, 90)   # 常用专注时长（分钟）
+
+
+class PomodoroDialog(tk.Toplevel):
+    """🍅 番茄钟：自定义专注时长 / 休息时长（滚轮选择）。"""
+
+    W, H = 400, 300
+
+    def __init__(self, master, app, on_start=None):
+        super().__init__(master)
+        self.app = app
+        self.on_start = on_start
+        c = self.C = get_theme(getattr(app, "theme_name", DEFAULT_THEME))
+        self.title("🍅 番茄钟")
+        center_window(self, self.W, self.H, master)
+        self.configure(bg=c["dialog_bg"])
+        self.resizable(False, False)
+
+        tk.Label(self, text="🍅 自定义番茄钟",
+                 font=("Microsoft YaHei", 14, "bold"),
+                 bg=c["dialog_bg"], fg=c["text"]).pack(pady=(14, 4))
+        tk.Label(self, text="选好时长后墨墨会捧着书陪你，头顶显示剩余时间",
+                 font=("Microsoft YaHei", 9),
+                 bg=c["dialog_bg"], fg=c["sidebar_muted"]).pack()
+
+        grid = tk.Frame(self, bg=c["dialog_bg"])
+        grid.pack(fill="x", padx=24, pady=(14, 6))
+        grid.grid_columnconfigure(1, weight=1)
+
+        kw = dict(font=("Microsoft YaHei", 11), width=5, justify="center",
+                  relief="flat", bd=0, bg=c["panel_bg"], fg=c["text"],
+                  buttonbackground=c["panel_bg"],
+                  insertbackground=c["text"],
+                  highlightthickness=1,
+                  highlightbackground=c["divider"],
+                  highlightcolor=c["accent"])
+
+        tk.Label(grid, text="专注", anchor="w", bg=c["dialog_bg"],
+                 fg=c["sidebar_muted"],
+                 font=("Microsoft YaHei", 10)).grid(row=0, column=0, pady=6)
+        self.spin_focus = tk.Spinbox(grid, from_=app.POMO_MIN, to=app.POMO_MAX,
+                                     **kw)
+        self.spin_focus.delete(0, "end")
+        self.spin_focus.insert(0, str(app.pomo_minutes))
+        self.spin_focus.grid(row=0, column=1, sticky="w", padx=(8, 0))
+        tk.Label(grid, text="分钟", bg=c["dialog_bg"], fg=c["text"],
+                 font=("Microsoft YaHei", 10)).grid(row=0, column=2,
+                                                    sticky="w", padx=6)
+
+        tk.Label(grid, text="休息", anchor="w", bg=c["dialog_bg"],
+                 fg=c["sidebar_muted"],
+                 font=("Microsoft YaHei", 10)).grid(row=1, column=0, pady=6)
+        self.spin_break = tk.Spinbox(grid, from_=app.POMO_MIN, to=app.POMO_MAX,
+                                     **kw)
+        self.spin_break.delete(0, "end")
+        self.spin_break.insert(0, str(app.pomo_break))
+        self.spin_break.grid(row=1, column=1, sticky="w", padx=(8, 0))
+        tk.Label(grid, text="分钟", bg=c["dialog_bg"], fg=c["text"],
+                 font=("Microsoft YaHei", 10)).grid(row=1, column=2,
+                                                    sticky="w", padx=6)
+
+        preset = tk.Frame(self, bg=c["dialog_bg"])
+        preset.pack(fill="x", padx=24, pady=(4, 6))
+        tk.Label(preset, text="常用：", bg=c["dialog_bg"],
+                 fg=c["sidebar_muted"],
+                 font=("Microsoft YaHei", 9)).pack(side="left")
+        for m in POMO_PRESETS:
+            tk.Button(preset, text=f"{m} 分钟", font=("Microsoft YaHei", 9),
+                      relief="flat", bg=c["panel_bg"], fg=c["text"],
+                      activebackground=c["panel_active"], bd=0,
+                      padx=8, pady=3,
+                      command=lambda mm=m: self._set_focus(mm)).pack(
+                side="left", padx=3)
+
+        self.var_remember = tk.BooleanVar(value=True)
+        tk.Checkbutton(self, text="记住为默认时长（下次直接开始）",
+                       variable=self.var_remember,
+                       font=("Microsoft YaHei", 9),
+                       bg=c["dialog_bg"], fg=c["text"],
+                       selectcolor=c["panel_bg"],
+                       activebackground=c["dialog_bg"],
+                       activeforeground=c["text"],
+                       highlightthickness=0, bd=0).pack(anchor="w", padx=24,
+                                                        pady=(4, 2))
+
+        btns = tk.Frame(self, bg=c["dialog_bg"])
+        btns.pack(pady=(10, 14))
+        tk.Button(btns, text="开始专注", font=("Microsoft YaHei", 10, "bold"),
+                  relief="flat", bg=c["accent"], fg=c["accent_fg"],
+                  activebackground=c["accent"], bd=0, padx=18, pady=5,
+                  command=self._ok).pack(side="left", padx=6)
+        tk.Button(btns, text="取消", font=("Microsoft YaHei", 10),
+                  relief="flat", bg=c["panel_bg"], fg=c["text"],
+                  activebackground=c["panel_active"], bd=0, padx=18, pady=5,
+                  command=self.destroy).pack(side="left", padx=6)
+
+        self.spin_focus.focus_set()
+        self.bind("<Return>", lambda e: self._ok())
+        self.bind("<Escape>", lambda e: self.destroy())
+        try:
+            self.transient(master)
+        except tk.TclError:
+            pass
+        self.grab_set()
+
+    def _set_focus(self, minutes):
+        self.spin_focus.delete(0, "end")
+        self.spin_focus.insert(0, str(minutes))
+
+    def _read(self, spin, fallback):
+        try:
+            return max(self.app.POMO_MIN,
+                       min(self.app.POMO_MAX, int(float(spin.get()))))
+        except (ValueError, tk.TclError):
+            return fallback
+
+    def _ok(self):
+        minutes = self._read(self.spin_focus, self.app.pomo_minutes)
+        rest = self._read(self.spin_break, self.app.pomo_break)
+        if self.var_remember.get():
+            self.app.set_pomo_minutes(minutes, rest)
+        self.destroy()
+        if self.on_start is not None:
+            self.on_start(minutes, rest)
+        else:
+            self.app.start_pomodoro(minutes, rest)
+
+
 class CountdownPage(BasePage):
     key = "countdowns"
     title = "⏳ 专属倒计时"
@@ -1093,7 +1222,8 @@ class CountdownPage(BasePage):
     def _build(self):
         c = self.C
         self._toolbar([("➕ 新建倒计时", self._add),
-                       ("🍅 番茄钟 45 分钟", self._start_pomo),
+                       ("🍅 开始番茄钟", self._start_pomo),
+                       ("⏹ 结束番茄钟", self._stop_pomo),
                        ("🔄 刷新", self.refresh)])
         self.body = tk.Frame(self, bg=c["app_bg"])
         self.body.pack(fill="both", expand=True, padx=16, pady=(0, 12))
@@ -1101,11 +1231,28 @@ class CountdownPage(BasePage):
         self._job = self.after(self.REFRESH_MS, self._auto)
 
     def _start_pomo(self):
-        """开启番茄钟：墨墨进入伴学状态。"""
-        self.app.start_pomodoro(45)
-        messagebox.showinfo("🍅 番茄钟已开始",
-                            "专注 45 分钟！召唤桌宠（⚙ 设置 → 桌面宠物）\n"
-                            "墨墨会捧着书陪你，头顶显示剩余时间。",
+        """弹出时长设置（滚轴选分钟），确认后开启番茄钟。"""
+        PomodoroDialog(self.app, self.app, on_start=self._on_pomo_start)
+
+    def _on_pomo_start(self, minutes, rest):
+        self.app.start_pomodoro(minutes, rest)
+        messagebox.showinfo(
+            "🍅 番茄钟已开始",
+            f"专注 {minutes} 分钟，结束后休息 {rest} 分钟！\n"
+            "召唤桌宠（⚙ 设置 → 桌面宠物）\n"
+            "墨墨会捧着书陪你，头顶显示剩余时间。",
+            parent=self.app)
+
+    def _stop_pomo(self):
+        """手动结束番茄钟：桌宠头上的倒计时会立刻消失。"""
+        if not self.app.pomodoro:
+            messagebox.showinfo("🍅 番茄钟",
+                                "当前没有正在进行的番茄钟～",
+                                parent=self.app)
+            return
+        self.app.stop_pomodoro()
+        messagebox.showinfo("🍅 番茄钟已结束",
+                            "已提前结束本轮专注，墨墨收起了倒计时。",
                             parent=self.app)
 
     def _auto(self):
@@ -1351,15 +1498,41 @@ class SettingsPage(BasePage):
 
         pomo_row = tk.Frame(self.body, bg=c["app_bg"])
         pomo_row.pack(anchor="w", pady=4)
-        pomo_text = ("⏹ 结束番茄钟" if self.app.pomodoro
-                     else "🍅 开始番茄钟（45 分钟）")
+        running = bool(self.app.pomodoro)
+        pomo_text = "⏹ 结束番茄钟" if running else "🍅 开始番茄钟"
+        spin_kw = dict(font=("Microsoft YaHei", 10), width=4, justify="center",
+                       relief="flat", bd=0, bg=c["panel_bg"], fg=c["text"],
+                       buttonbackground=c["panel_bg"],
+                       insertbackground=c["text"],
+                       highlightthickness=1,
+                       highlightbackground=c["divider"],
+                       highlightcolor=c["accent"])
+        self.var_pomo = tk.IntVar(value=self.app.pomo_minutes)
+        if not running:
+            self.spin_pomo = tk.Spinbox(pomo_row, from_=self.app.POMO_MIN,
+                                        to=self.app.POMO_MAX,
+                                        textvariable=self.var_pomo, **spin_kw)
+            self.spin_pomo.pack(side="left")
+            tk.Label(pomo_row, text="分钟", bg=c["app_bg"], fg=c["text"],
+                     font=("Microsoft YaHei", 9)).pack(side="left", padx=(3, 8))
         tk.Button(pomo_row, text=pomo_text, font=("Microsoft YaHei", 10),
                   relief="flat", bg=c["panel_bg"], fg=c["text"],
                   activebackground=c["panel_active"], bd=0,
                   padx=12, pady=4,
                   command=self._toggle_pomodoro).pack(side="left")
+        self.var_pomo_break = tk.IntVar(value=self.app.pomo_break)
+        if not running:
+            self.spin_pomo_break = tk.Spinbox(
+                pomo_row, from_=self.app.POMO_MIN, to=self.app.POMO_MAX,
+                textvariable=self.var_pomo_break, **spin_kw)
+            self.spin_pomo_break.pack(side="left", padx=(12, 0))
+            tk.Label(pomo_row, text="分钟休息", bg=c["app_bg"],
+                     fg=c["text"], font=("Microsoft YaHei", 9)).pack(
+                side="left", padx=(3, 4))
         tk.Label(pomo_row,
-                 text="开启后墨墨会捧着书陪你专注，头顶倒计时，到点提醒休息",
+                 text=("专注结束后墨墨会收起倒计时、提醒你休息"
+                       if running else
+                       "自定义专注时长：开启后墨墨捧书陪你，头顶倒计时"),
                  bg=c["app_bg"], fg=c["sidebar_muted"],
                  font=("Microsoft YaHei", 9)).pack(side="left", padx=10)
 
@@ -1409,7 +1582,14 @@ class SettingsPage(BasePage):
         if self.app.pomodoro:
             self.app.stop_pomodoro()
         else:
-            self.app.start_pomodoro(45)
+            # 以页面上的自定义时长开始，并记住为下次默认
+            try:
+                mins = int(self.var_pomo.get())
+                rest = int(self.var_pomo_break.get())
+            except (ValueError, tk.TclError):
+                mins, rest = self.app.pomo_minutes, self.app.pomo_break
+            self.app.set_pomo_minutes(mins, rest)
+            self.app.start_pomodoro(mins, rest)
         self.app._show_page("settings")   # 重建页面以更新按钮文字
 
     def _toggle_monitor(self):

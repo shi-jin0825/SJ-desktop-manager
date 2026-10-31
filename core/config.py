@@ -11,7 +11,10 @@ DEFAULT_CONFIG = {
     # key: 桌面项名称 -> value: 分类名
     "assignments": {},
     # 界面设置（如 theme: light / dark）
-    "settings": {"theme": "light"},
+    # pomodoro_minutes / pomodoro_break：番茄钟专注与休息时长（分钟）
+    "settings": {"theme": "light",
+                 "pomodoro_minutes": 45,
+                 "pomodoro_break": 5},
     # 专属倒计时（倒数日）：[{id, title, date, note, repeat, created}]
     "countdowns": [],
 }
