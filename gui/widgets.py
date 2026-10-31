@@ -162,6 +162,7 @@ class ModernButton(tk.Canvas):
         self._hover = False
         self._pressed = False
         self._enabled = True
+        self._img = None        # 胶囊位图（持有引用，防止被回收）
 
         f = tkfont.Font(font=self.font)
         tw = f.measure(text) if text else 0
@@ -228,30 +229,26 @@ class ModernButton(tk.Canvas):
                 else c.get("text", "#333333")
         if self._pressed:
             top, bot = mix(top, "#000000", 0.12), mix(bot, "#000000", 0.12)
-        return top or "#cccccc", bot or "#999999", fg
+        if self.primary:
+            border = mix(bot, "#000000", 0.10)
+        else:
+            border = mix(base, c.get("accent", "#4b6bfb"),
+                         0.55 if self._hover else 0.42)
+        if self._pressed:
+            border = mix(border, "#000000", 0.12)
+        return top or "#cccccc", bot or "#999999", fg, border or "#999999"
 
     def _paint(self):
         self.delete("all")
-        w, h, r = self.W, self.H, self.H / 2.0
-        top, bot, fg = self._colors()
+        w, h = int(self.W), int(self.H)
+        top, bot, fg, border = self._colors()
         if not self._enabled:
-            top = bot = mix(top, self.c.get("app_bg", "#eeeeee"), 0.55)
-            fg = mix(fg, self.c.get("app_bg", "#eeeeee"), 0.55)
-        # 胶囊：逐行填充渐变（天然形成两端圆角）
-        for y in range(h):
-            dy = abs(y - (h - 1) / 2.0)
-            if dy > r:
-                continue
-            dx = math.sqrt(max(0.0, r * r - dy * dy))
-            self.create_line(int(r - dx), y, int(w - r + dx), y,
-                             fill=mix(top, bot, y / max(1.0, h - 1.0)))
-        # 淡描边，边缘更干净
-        self.create_oval(0, 0, h - 1, h - 1, outline=mix(bot, "#000000", 0.06))
-        self.create_oval(w - h, 0, w - 1, h - 1,
-                         outline=mix(bot, "#000000", 0.06))
-        self.create_line(h / 2, 0, w - h / 2, 0, fill=mix(bot, "#000000", 0.06))
-        self.create_line(h / 2, h - 1, w - h / 2, h - 1,
-                         fill=mix(bot, "#000000", 0.06))
+            fade = self.c.get("app_bg", "#eeeeee")
+            top = bot = mix(top, fade, 0.55)
+            border = mix(border, fade, 0.55)
+            fg = mix(fg, fade, 0.55)
+        self._img = self._capsule(w, h, top, bot, border, self._img)
+        self.create_image(0, 0, image=self._img, anchor="nw")
 
         x = self.padx
         if self.icon:
@@ -261,6 +258,92 @@ class ModernButton(tk.Canvas):
         if self.text:
             self.create_text(x, h / 2.0, text=self.text, anchor="w",
                              fill=fg, font=self.font)
+
+    # ---- 胶囊渲染（逐像素抗锯齿，两端不留圆形轮廓）----
+    BORDER = 1.15    # 描边宽度（px），沿轮廓一圈，不是两个圆
+    _SS = 4          # 抗锯齿超采样：每像素 4×4
+
+    @staticmethod
+    def _dist(px, py, w, r, cy):
+        """点到胶囊轴线段 [(r, cy), (w-r, cy)] 的距离。"""
+        if px < r:
+            dx = px - r
+        elif px > w - r:
+            dx = px - (w - r)
+        else:
+            dx = 0.0
+        return math.sqrt(dx * dx + (py - cy) * (py - cy))
+
+    def _capsule(self, w, h, top, bot, border, img=None):
+        """把「圆角胶囊 + 垂直渐变」渲染成一张 PhotoImage。
+
+        早先的写法是逐行 create_line 再用 create_oval 描边，结果两端各露出
+        一个完整的圆形轮廓（内侧那半圈也画了出来），看起来就像两个圆框。
+        这里改成自己算每个像素被胶囊覆盖的比例：内部直接填渐变色，边缘用
+        4×4 超采样跟背景混合，最外 1px 再淡淡压一点描边色 —— 胶囊天然是
+        两端半圆，不需要（也不会）出现任何圆形边框。
+        """
+        r = min(h, w) / 2.0
+        cy = h / 2.0
+        bg = hex_rgb(self.c.get("app_bg", "#ffffff"))
+        t0, t1 = hex_rgb(top), hex_rgb(bot)
+        bd = hex_rgb(border)
+        bw = self.BORDER
+        ss = self._SS
+        step = 1.0 / ss
+        total = ss * ss
+        half = 0.5 * math.sqrt(2.0)      # 像素中心到角点的距离，用于快速判定
+        if img is None or img.width() != w or img.height() != h:
+            img = tk.PhotoImage(width=w, height=h)
+
+        bg_hex = "#%02x%02x%02x" % bg
+        rows = []
+        for y in range(h):
+            f = y / max(1.0, h - 1.0)
+            fr = t0[0] + (t1[0] - t0[0]) * f
+            fgc = t0[1] + (t1[1] - t0[1]) * f
+            fb = t0[2] + (t1[2] - t0[2]) * f
+            solid = "#%02x%02x%02x" % (int(fr + 0.5), int(fgc + 0.5),
+                                       int(fb + 0.5))
+            cells = []
+            for x in range(w):
+                # 中部矩形区：整块实心，直接填渐变色
+                if r <= x and x + 1 <= w - r:
+                    cells.append(solid)
+                    continue
+                # 明显在胶囊外：保持画布底色
+                if self._dist(x + 0.5, y + 0.5, w, r, cy) - half > r:
+                    cells.append(bg_hex)
+                    continue
+                # 边缘：超采样算覆盖率，最外一圈掺入描边色
+                cov = edge = 0
+                for j in range(ss):
+                    py = y + (j + 0.5) * step
+                    for i in range(ss):
+                        d = self._dist(x + (i + 0.5) * step, py, w, r, cy)
+                        if d > r:
+                            continue
+                        cov += 1
+                        if d > r - bw:
+                            edge += 1
+                if not cov:
+                    cells.append(bg_hex)
+                    continue
+                a = cov / float(total)
+                if edge:
+                    k = edge / float(cov)
+                    cr = fr + (bd[0] - fr) * k
+                    cg = fgc + (bd[1] - fgc) * k
+                    cb = fb + (bd[2] - fb) * k
+                else:
+                    cr, cg, cb = fr, fgc, fb
+                cells.append("#%02x%02x%02x"
+                             % (int(cr * a + bg[0] * (1 - a) + 0.5),
+                                int(cg * a + bg[1] * (1 - a) + 0.5),
+                                int(cb * a + bg[2] * (1 - a) + 0.5)))
+            rows.append("{" + " ".join(cells) + "}")
+        img.put(" ".join(rows), (0, 0))
+        return img
 
 
 class RoundedEntry(tk.Canvas):
