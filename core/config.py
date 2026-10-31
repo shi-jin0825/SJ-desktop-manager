@@ -1,7 +1,8 @@
 # -*- coding: utf-8 -*-
-"""配置管理模块：分类与分配关系持久化到 config.json。"""
+"""配置管理模块：分类、分配关系、倒计时与界面设置持久化到 config.json。"""
 import json
 import os
+import time
 
 CONFIG_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "config.json")
 
@@ -11,6 +12,8 @@ DEFAULT_CONFIG = {
     "assignments": {},
     # 界面设置（如 theme: light / dark）
     "settings": {"theme": "light"},
+    # 专属倒计时（倒数日）：[{id, title, date, note, repeat, created}]
+    "countdowns": [],
 }
 
 
@@ -96,3 +99,53 @@ class ConfigManager:
 
     def get_category(self, item_name: str) -> str:
         return self.data["assignments"].get(item_name, "")
+
+    # ---- 专属倒计时（倒数日）----
+    @property
+    def countdowns(self) -> list:
+        return self.data["countdowns"]
+
+    def add_countdown(self, title: str, date: str, note: str = "",
+                      repeat: bool = False) -> str:
+        """新增一条倒计时，返回它的 id。"""
+        cid = "cd%d" % int(time.time() * 1000)
+        # 保证 id 唯一（同一毫秒内连续创建时）
+        while any(c.get("id") == cid for c in self.countdowns):
+            cid += "x"
+        self.countdowns.append({
+            "id": cid,
+            "title": title.strip(),
+            "date": date,
+            "note": (note or "").strip(),
+            "repeat": bool(repeat),
+            "created": time.strftime("%Y-%m-%d"),
+        })
+        self.save()
+        return cid
+
+    def update_countdown(self, cid: str, **fields) -> bool:
+        """更新一条倒计时的字段（title / date / note / repeat）。"""
+        for item in self.countdowns:
+            if item.get("id") == cid:
+                for key, val in fields.items():
+                    if key in ("title", "date", "note"):
+                        item[key] = (val or "").strip() if key != "date" else val
+                    elif key == "repeat":
+                        item[key] = bool(val)
+                self.save()
+                return True
+        return False
+
+    def remove_countdown(self, cid: str) -> bool:
+        for i, item in enumerate(self.countdowns):
+            if item.get("id") == cid:
+                self.countdowns.pop(i)
+                self.save()
+                return True
+        return False
+
+    def get_countdown(self, cid: str):
+        for item in self.countdowns:
+            if item.get("id") == cid:
+                return item
+        return None

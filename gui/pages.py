@@ -11,6 +11,7 @@ from tkinter import messagebox, simpledialog
 from core.scanner import scan_desktop, get_desktop_paths
 from core.icons import icon_png
 from core import sysinfo
+from core import countdown as cd
 from gui.theme import (DEFAULT_THEME, THEMES, THEME_NAMES, get_theme, style_menu)
 from gui.widgets import (open_target, make_photo, rounded_rect, short_name,
                          center_window, hline, stat_bar, shrink)
@@ -33,7 +34,7 @@ PREVIEW_PAD = 3
 PREVIEW_COLS = 3
 MAX_PREVIEW = PREVIEW_COLS ** 2
 
-APP_VERSION = "v0.6"
+APP_VERSION = "v0.9"
 KIND_LABEL = {"shortcut": "快捷方式", "dir": "文件夹", "file": "文件"}
 
 
@@ -890,7 +891,308 @@ class SystemPage(BasePage):
 
 
 # ======================================================================
-# 5. 设置页
+# 5. 专属倒计时（倒数日）
+# ======================================================================
+class CountdownDialog(tk.Toplevel):
+    """新建 / 编辑一条倒计时的弹窗。"""
+
+    WIDTH, HEIGHT = 430, 330
+
+    def __init__(self, master, theme, item=None, on_save=None):
+        super().__init__(master)
+        c = theme
+        self.C = c
+        self.item = item or {}
+        self.on_save = on_save
+        self.title("编辑倒计时" if item else "新建倒计时")
+        center_window(self, self.WIDTH, self.HEIGHT, master)
+        self.configure(bg=c["dialog_bg"])
+        self.transient(master)
+        self.grab_set()
+
+        tk.Label(self, text=self.title(), font=("Microsoft YaHei", 13, "bold"),
+                 bg=c["dialog_bg"], fg=c["text"]).pack(pady=(14, 12))
+
+        form = tk.Frame(self, bg=c["dialog_bg"])
+        form.pack(fill="x", padx=20)
+
+        self.var_title = tk.StringVar(value=self.item.get("title", ""))
+        self.var_date = tk.StringVar(
+            value=self.item.get("date") or cd.fmt_date(cd.quick_date(30)))
+        self.var_note = tk.StringVar(value=self.item.get("note", ""))
+        self.var_repeat = tk.BooleanVar(value=bool(self.item.get("repeat")))
+
+        self._row(form, "标题", self.var_title, 0)
+        self._date_row(form, 1)
+        self._row(form, "备注", self.var_note, 2)
+
+        tk.Checkbutton(self, text="每年循环（生日 / 纪念日）",
+                       variable=self.var_repeat,
+                       font=("Microsoft YaHei", 9),
+                       bg=c["dialog_bg"], fg=c["text"],
+                       selectcolor=c["panel_bg"],
+                       activebackground=c["dialog_bg"],
+                       activeforeground=c["text"],
+                       highlightthickness=0, bd=0).pack(anchor="w", padx=20, pady=(8, 0))
+
+        btns = tk.Frame(self, bg=c["dialog_bg"])
+        btns.pack(pady=16)
+        tk.Button(btns, text="保存", width=10, font=("Microsoft YaHei", 10),
+                  relief="flat", bg=c["accent"], fg=c["accent_fg"],
+                  activebackground=c["accent"], bd=0, padx=8, pady=4,
+                  command=self._save).pack(side="left", padx=6)
+        tk.Button(btns, text="取消", width=10, font=("Microsoft YaHei", 10),
+                  relief="flat", bg=c["panel_bg"], fg=c["text"],
+                  activebackground=c["panel_active"], bd=0, padx=8, pady=4,
+                  command=self.destroy).pack(side="left", padx=6)
+
+        self.bind("<Return>", lambda e: self._save())
+        self.bind("<Escape>", lambda e: self.destroy())
+
+    def _row(self, parent, label, var, row):
+        c = self.C
+        tk.Label(parent, text=label, width=5, anchor="w",
+                 bg=c["dialog_bg"], fg=c["sidebar_muted"],
+                 font=("Microsoft YaHei", 10)).grid(row=row, column=0, pady=6)
+        tk.Entry(parent, textvariable=var, width=28,
+                 font=("Microsoft YaHei", 10), relief="flat",
+                 bg=c["panel_bg"], fg=c["text"],
+                 insertbackground=c["text"],
+                 highlightthickness=1,
+                 highlightbackground=c["divider"]).grid(
+            row=row, column=1, sticky="ew", pady=6, padx=(8, 0))
+        parent.grid_columnconfigure(1, weight=1)
+
+    def _date_row(self, parent, row):
+        c = self.C
+        tk.Label(parent, text="日期", width=5, anchor="w",
+                 bg=c["dialog_bg"], fg=c["sidebar_muted"],
+                 font=("Microsoft YaHei", 10)).grid(row=row, column=0, pady=6)
+        cell = tk.Frame(parent, bg=c["dialog_bg"])
+        cell.grid(row=row, column=1, sticky="ew", pady=6, padx=(8, 0))
+        tk.Entry(cell, textvariable=self.var_date, width=14,
+                 font=("Microsoft YaHei", 10), relief="flat",
+                 bg=c["panel_bg"], fg=c["text"],
+                 insertbackground=c["text"],
+                 highlightthickness=1,
+                 highlightbackground=c["divider"]).pack(side="left")
+        for text, days in (("今天", 0), ("+7天", 7), ("+30天", 30), ("+100天", 100)):
+            tk.Button(cell, text=text, font=("Microsoft YaHei", 8),
+                      relief="flat", bg=c["panel_bg"], fg=c["sidebar_muted"],
+                      activebackground=c["panel_active"], bd=0, padx=5, pady=2,
+                      command=lambda d=days: self.var_date.set(
+                          cd.fmt_date(cd.quick_date(d)))).pack(side="left", padx=2)
+        tk.Label(parent, text="格式 YYYY-MM-DD", bg=c["dialog_bg"],
+                 fg=c["sidebar_muted"],
+                 font=("Microsoft YaHei", 8)).grid(row=row + 1, column=1,
+                                                   sticky="w", padx=(8, 0))
+
+    def _save(self):
+        title = self.var_title.get().strip()
+        if not title:
+            messagebox.showwarning("提示", "请填写倒计时标题", parent=self)
+            return
+        d = cd.parse_date(self.var_date.get())
+        if d is None:
+            messagebox.showwarning("提示",
+                                   "日期看不懂，请按 2026-12-20 这样的格式填写",
+                                   parent=self)
+            return
+        if self.on_save:
+            self.on_save({"title": title, "date": cd.fmt_date(d),
+                          "note": self.var_note.get(),
+                          "repeat": self.var_repeat.get()})
+        self.destroy()
+
+
+class CountdownPage(BasePage):
+    key = "countdowns"
+    title = "⏳ 专属倒计时"
+    subtitle = "倒数日：记住每一个重要的日子"
+    REFRESH_MS = 60000        # 每分钟刷新一次，过零点后自动更新
+
+    def __init__(self, master, app):
+        self._job = None
+        super().__init__(master, app)
+
+    def _build(self):
+        c = self.C
+        self._toolbar([("➕ 新建倒计时", self._add), ("🔄 刷新", self.refresh)])
+        self.body = tk.Frame(self, bg=c["app_bg"])
+        self.body.pack(fill="both", expand=True, padx=16, pady=(0, 12))
+        self.refresh()
+        self._job = self.after(self.REFRESH_MS, self._auto)
+
+    def _auto(self):
+        self.refresh()
+        self._job = self.after(self.REFRESH_MS, self._auto)
+
+    def destroy(self):
+        job = getattr(self, "_job", None)
+        if job is not None:
+            try:
+                self.after_cancel(job)
+            except Exception:
+                pass
+            self._job = None
+        super().destroy()
+
+    def refresh(self):
+        c = self.C
+        for w in self.body.winfo_children():
+            w.destroy()
+        items = sorted(self.cfg.countdowns, key=cd.sort_key)
+
+        if not items:
+            box = tk.Frame(self.body, bg=c["app_bg"])
+            box.pack(pady=60)
+            tk.Label(box, text="⏳", bg=c["app_bg"], fg=c["text"],
+                     font=("Microsoft YaHei", 34)).pack()
+            tk.Label(box, text="还没有倒计时", bg=c["app_bg"], fg=c["text"],
+                     font=("Microsoft YaHei", 13, "bold")).pack(pady=(6, 4))
+            tk.Label(box, text="点「➕ 新建倒计时」记下第一个重要的日子\n"
+                              "（考试、生日、发工资、假期…）",
+                     bg=c["app_bg"], fg=c["sidebar_muted"],
+                     font=("Microsoft YaHei", 9), justify="center").pack()
+            self.app.update_topbar("暂无倒计时")
+            return
+
+        # 置顶焦点：最近的一个日子
+        head = items[0]
+        if cd.describe(head)["state"] != "invalid":
+            self._focus_card(head)
+            rest = items[1:]
+        else:
+            rest = items
+        for item in rest:
+            self._card(item)
+        self.app.update_topbar(f"{len(items)} 个倒计时 · "
+                               f"最近：{head.get('title', '')}")
+
+    # ---- 卡片 ----
+    def _focus_card(self, item):
+        """置顶大卡：把最近的日子放大显示，起到提醒作用。"""
+        c = self.C
+        info = cd.describe(item)
+        card = tk.Frame(self.body, bg=c["card_bg"], highlightthickness=2,
+                        highlightbackground=c["accent"], padx=18, pady=16)
+        card.pack(fill="x", pady=(6, 12))
+
+        num_color = c["accent"] if info["state"] != "past" else c["sidebar_muted"]
+        tk.Label(card, text=self._big_number(info), bg=c["card_bg"],
+                 fg=num_color, font=("Microsoft YaHei", 30, "bold"),
+                 anchor="w").pack(anchor="w")
+        tk.Label(card, text=item.get("title", ""), bg=c["card_bg"], fg=c["text"],
+                 font=("Microsoft YaHei", 14, "bold"), anchor="w").pack(anchor="w")
+        tk.Label(card, text=self._date_text(item, info), bg=c["card_bg"],
+                 fg=c["sidebar_muted"], font=("Microsoft YaHei", 10),
+                 anchor="w").pack(anchor="w", pady=(2, 0))
+        if item.get("note"):
+            tk.Label(card, text=item["note"], bg=c["card_bg"],
+                     fg=c["sidebar_muted"], font=("Microsoft YaHei", 9),
+                     anchor="w").pack(anchor="w")
+        self._progress_row(card, item)
+
+    def _card(self, item):
+        c = self.C
+        info = cd.describe(item)
+        card = tk.Frame(self.body, bg=c["card_bg"], highlightthickness=1,
+                        highlightbackground=c["divider"], padx=14, pady=12)
+        card.pack(fill="x", pady=6)
+
+        num_color = c["accent"] if info["state"] != "past" else c["sidebar_muted"]
+        left = tk.Frame(card, bg=c["card_bg"], width=118)
+        left.pack(side="left", fill="y")
+        left.pack_propagate(False)
+        tk.Label(left, text=self._big_number(info), bg=c["card_bg"],
+                 fg=num_color, font=("Microsoft YaHei", 22, "bold"),
+                 anchor="center").pack(fill="x")
+
+        mid = tk.Frame(card, bg=c["card_bg"])
+        mid.pack(side="left", fill="both", expand=True)
+        tk.Label(mid, text=item.get("title", ""), bg=c["card_bg"], fg=c["text"],
+                 font=("Microsoft YaHei", 12, "bold"), anchor="w").pack(fill="x")
+        tk.Label(mid, text=self._date_text(item, info), bg=c["card_bg"],
+                 fg=c["sidebar_muted"], font=("Microsoft YaHei", 9),
+                 anchor="w").pack(fill="x")
+        if item.get("note"):
+            tk.Label(mid, text=item["note"], bg=c["card_bg"],
+                     fg=c["sidebar_muted"], font=("Microsoft YaHei", 9),
+                     anchor="w").pack(fill="x")
+        self._progress_row(mid, item)
+
+        btns = tk.Frame(card, bg=c["card_bg"])
+        btns.pack(side="right")
+        for text, cmd in (("编辑", lambda: self._edit(item["id"])),
+                          ("删除", lambda: self._delete(item["id"]))):
+            tk.Button(btns, text=text, font=("Microsoft YaHei", 9),
+                      relief="flat", bg=c["panel_bg"], fg=c["text"],
+                      activebackground=c["panel_active"], bd=0,
+                      padx=10, pady=3, command=cmd).pack(side="left", padx=3)
+
+    @staticmethod
+    def _big_number(info) -> str:
+        """卡片左侧的大数字（今天 / 无效日期做特殊显示）。"""
+        if info["state"] == "invalid":
+            return "?"
+        if info["state"] == "today":
+            return "今天"
+        return f"{abs(info['days'])} 天"
+
+    def _date_text(self, item, info) -> str:
+        """目标日期 + 星期 + 循环标记 + 还有/已过说明。"""
+        if info["state"] == "invalid":
+            return f"日期「{item.get('date', '')}」无法识别，点编辑修正"
+        target = info["target"]
+        when = cd.weekday_cn(target) if target else ""
+        repeat = " · 每年循环" if item.get("repeat") else ""
+        return f"{cd.fmt_date(target)} {when}{repeat} · {info['text']}"
+
+    def _progress_row(self, parent, item):
+        """完成度进度条（区间算不出来就不画）。"""
+        ratio = cd.progress(item)
+        if ratio is None:
+            return
+        c = self.C
+        row = tk.Frame(parent, bg=c["card_bg"])
+        row.pack(fill="x", pady=(6, 0))
+        stat_bar(row, ratio, c, width=260, height=8)
+        tk.Label(row, text=f"{ratio * 100:.0f}%", bg=c["card_bg"],
+                 fg=c["sidebar_muted"], font=("Microsoft YaHei", 8)).pack(
+            side="left", padx=8)
+
+    # ---- 增删改 ----
+    def _add(self):
+        CountdownDialog(self.app, self.C,
+                        on_save=lambda data: self._save(None, data))
+
+    def _edit(self, cid):
+        item = self.cfg.get_countdown(cid)
+        if item is None:
+            return
+        CountdownDialog(self.app, self.C, item=item,
+                        on_save=lambda data: self._save(cid, data))
+
+    def _save(self, cid, data):
+        if cid:
+            self.cfg.update_countdown(cid, **data)
+        else:
+            self.cfg.add_countdown(**data)
+        self.refresh()
+
+    def _delete(self, cid):
+        item = self.cfg.get_countdown(cid)
+        if item is None:
+            return
+        if messagebox.askyesno("删除倒计时",
+                               f"删除「{item.get('title', '')}」？",
+                               parent=self.app):
+            self.cfg.remove_countdown(cid)
+            self.refresh()
+
+
+# ======================================================================
+# 6. 设置页
 # ======================================================================
 class SettingsPage(BasePage):
     key = "settings"
@@ -969,5 +1271,6 @@ class SettingsPage(BasePage):
         btn.config(text="🐙 收起宠物" if self.app.pet_active() else "🐙 召唤宠物")
 
 
-PAGES = (DesktopPage, CategoriesPage, StatsPage, SystemPage, SettingsPage)
+PAGES = (DesktopPage, CategoriesPage, StatsPage, SystemPage,
+         CountdownPage, SettingsPage)
 PAGE_BY_KEY = {p.key: p for p in PAGES}
