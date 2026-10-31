@@ -1,17 +1,23 @@
 # -*- coding: utf-8 -*-
 """
-桌面悬浮宠物「墨墨」—— 从主程序召唤到桌面上的独立悬浮窗。
+桌面悬浮宠物「墨墨」—— 2.0：物理引擎 + 系统状态联动 + 番茄钟伴学。
 
-三个特性：
-  1. 无边框 + 背景完全透明：overrideredirect + `-transparentcolor`，
-     只显示章鱼本体，没有白底/灰底
-  2. 鼠标穿透：Windows 对透明色区域不做命中测试，点击直接穿过去；
-     另附"完全穿透"模式（Win32 WS_EX_TRANSPARENT）
-  3. 上下浮动：after() 定时器 + 正弦曲线驱动 Y 坐标
+特性一览：
+  1. 无边框 + 背景完全透明（-transparentcolor），透明区域自动鼠标穿透
+  2. 物理引擎：
+     · 抓起来拖动，松手把"甩出"的速度继承下来（vx / vy）
+     · 重力下落、左右墙壁反弹、地面反弹衰减
+     · 落地瞬间播放 Q 弹压缩动画（Tk 原生 zoom/subsample 生成整数比帧）
+  3. 摸头互动：单击 → 眯眼笑；3 秒内连续点击 5 次 → 害羞
+  4. 系统联动（可开关，零依赖复用 core/sysinfo）：
+     · CPU 占用 ≥ 80% → 好热（汗滴 + 吐舌）
+     · 内存负载 ≥ 85% → 疲惫（半闭眼），浮动也变得有气无力
+     · 下载 ≥ 400 KB/s → 奔跑（速度线 + 横向跑动，越快跑得越快）
+     状态变化时头顶冒气泡说明
+  5. 番茄钟伴学：主窗口/右键菜单开启后，墨墨捧书陪你，头顶显示倒计时
+  6. 右键菜单：番茄钟 / 物理开关 / 联动开关 / 穿透 / 浮动速度 / 收起
 
-注意：这里用 tk.Toplevel 而不是 tk.Tk —— 主程序只有一个根窗口，
-再开一个 Tk 实例会产生第二套 Tcl 解释器，图片资源不通用。
-Toplevel 是子窗口，还会跟着主窗口一起退出。
+注意：tk.Toplevel（不是第二个 Tk 实例），资源与主窗口互通。
 """
 
 import ctypes
@@ -28,21 +34,37 @@ import tkinter as tk
 #  可调参数
 # ==========================================================================
 
-PET_SIZE = 100               # 宠物显示尺寸（像素，改这里就能大/小）
+PET_SIZE = 100               # 宠物显示尺寸（像素）
 
-FLOAT_AMPLITUDE = 8          # ★浮动幅度：向上/向下各移动多少像素（0 = 静止）
-FLOAT_PERIOD = 4.0           # ★浮动速度：完成一次「上→下→上」的秒数
-                             #            数值越大 = 游得越慢
-                             #            2.0 轻快 / 4.0 悠闲 / 8.0 慢悠悠
-FPS = 60                     # 动画帧率（30 也够顺滑且更省 CPU）
+WIN_SCALE = 1.45             # 窗口相对图片的放大倍数（容纳 Q 弹拉伸）
+                             # 图片在窗口内底部居中，四周透明可穿透
 
+FLOAT_AMPLITUDE = 8          # 浮动幅度（0 = 静止）
+FLOAT_PERIOD = 4.0           # 浮动周期（秒），越大越慢
+FPS = 60                     # 动画帧率
+
+GRAVITY = 2200.0             # 重力加速度 px/s²
+RESTITUTION = 0.42           # 反弹恢复系数（0~1，越大弹得越久）
+BOUNCE_STOP_V = 160.0        # 反弹速度低于此值就停下来
+DRAG_SMOOTH = 0.35           # 抛出速度 = 历史速度的指数平均系数
+MAX_LAUNCH = 2600.0          # 抛出速度上限（防止甩飞出屏）
+
+MARGIN_X = 80                # 水平安全边距
 MARGIN_RIGHT = 80            # 初始位置：距屏幕右边
 MARGIN_BOTTOM = 110          # 初始位置：距屏幕底边（留任务栏）
 
-KEY_COLOR = "#ff00ff"        # 透明色（品红）；图片里若有同色像素会被挖空
+KEY_COLOR = "#ff00ff"        # 透明色（品红）
 
-HAPPY_MS = 350               # ★点击后眯眼笑形态保持的毫秒数，之后变回睁眼
-                             #            350 轻快 / 700 标准 / 1200 慢悠悠
+HAPPY_MS = 900               # 单击后开心形态保持毫秒数
+SHY_AFTER_CLICKS = 5         # 3 秒内连续点击多少次后害羞
+SHY_MS = 1600                # 害羞形态保持毫秒数
+
+MONITOR_PERIOD_S = 1.2       # 系统状态采样间隔
+CPU_HOT = 80                 # CPU 占用超过此值 → 好热
+MEM_TIRED = 85               # 内存负载超过此值 → 疲惫
+NET_FAST = 400 * 1024        # 下载速度超过此值 → 奔跑（字节/秒）
+NET_RUN_SPEED = 150          # 奔跑横向速度基准 px/s（随网速加快）
+SQUASH_MS = 260              # 落地压缩动画总时长
 
 # ==========================================================================
 #  Win32
@@ -51,6 +73,11 @@ HAPPY_MS = 350               # ★点击后眯眼笑形态保持的毫秒数，�
 GWL_EXSTYLE = -20
 WS_EX_TRANSPARENT = 0x00000020
 _user32 = ctypes.WinDLL("user32", use_last_error=True)
+
+
+class _RECT(ctypes.Structure):
+    _fields_ = [("left", wintypes.LONG), ("top", wintypes.LONG),
+                ("right", wintypes.LONG), ("bottom", wintypes.LONG)]
 
 
 def hwnd_of(win) -> int:
@@ -69,6 +96,14 @@ def set_full_through(hwnd: int, enabled: bool) -> None:
 
 def screen_size():
     return _user32.GetSystemMetrics(0), _user32.GetSystemMetrics(1)
+
+
+def work_area_height() -> int:
+    """不含任务栏的工作区底边 y（落地以它为准）。"""
+    rc = _RECT()
+    if _user32.SystemParametersInfoW(0x0030, 0, ctypes.byref(rc), 0):
+        return rc.bottom
+    return screen_size()[1]
 
 
 # ==========================================================================
@@ -255,7 +290,6 @@ def build_photo(master, rgba, size, key_rgb=(255, 0, 255)):
 
 
 def default_image_path() -> str:
-    """默认用项目 assets 里的墨墨立绘（睁眼形态）。"""
     base = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                         "assets")
     return os.path.join(base, "momo-open.png")
@@ -272,7 +306,6 @@ def load_pet(master, path, size):
 
 
 def load_pet_fallback(master, size):
-    """按优先级尝试素材表，全失败返回 None（由调用方画兜底章鱼）。"""
     base = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                         "assets")
     for name in ("momo-open.png", "mascot-stand.png"):
@@ -282,12 +315,122 @@ def load_pet_fallback(master, size):
     return None
 
 
+def squash(base_photo, sy_num, sy_den, sx_num, sx_den):
+    """整数比压缩帧：垂直 sy_num/sy_den、水平 sx_num/sx_den。
+
+    用 Tk 原生 subsample（丢行）/zoom（复制行），C 实现，零 Python 循环。
+    先 subsample 再 zoom 可实现任意 a/b 比例（a<b 压缩，a>b 拉伸）。
+    """
+    img = base_photo
+    if sy_den != 1:
+        img = img.subsample(1, sy_den)
+    if sy_num != sy_den:
+        img = img.zoom(1, sy_num)
+    if sx_num != sx_den:
+        img = img.zoom(sx_num, 1)
+        img = img.subsample(sx_den, 1)
+    return img
+
+
+# ==========================================================================
+#  表情表
+# ==========================================================================
+
+FACE_FILES = {
+    "idle": "momo-open.png",      # 睁眼笑（默认）
+    "happy": "momo-happy.png",    # 点击：开心
+    "shy": "momo-shy.png",        # 连续点击：害羞
+    "hot": "momo-hot.png",        # CPU 高：冒汗吐舌
+    "tired": "momo-tired.png",    # 内存紧：疲惫
+    "study": "momo-study.png",    # 番茄钟：伴学
+    "run": "momo-run.png",        # 网速快：奔跑
+}
+
+
+# ==========================================================================
+#  头顶气泡
+# ==========================================================================
+
+class Bubble(tk.Toplevel):
+    """宠物头顶的气泡：Canvas 圆角矩形 + 文字，随宠物移动。"""
+
+    PAD_X, PAD_Y = 10, 7
+    TAIL = 9
+
+    def __init__(self, pet, colors):
+        super().__init__(pet)
+        self.overrideredirect(True)
+        self.config(bg=KEY_COLOR)
+        self.attributes("-transparentcolor", KEY_COLOR)
+        self.attributes("-topmost", True)
+        self._pet = pet
+        self._c = colors
+        self._cv = tk.Canvas(self, bg=KEY_COLOR, highlightthickness=0, bd=0)
+        self._cv.pack(fill="both", expand=True)
+        self.withdraw()
+        self._auto = None
+        self.bw = self.bh = 0
+
+    def say(self, text: str, ms=3000):
+        """显示气泡；ms 毫秒后自动消失（0 = 一直显示直到 hide）。"""
+        c = self._c
+        self._cv.delete("all")
+        probe = self._cv.create_text(0, 0, text=text, anchor="nw",
+                                     font=("Microsoft YaHei", 9), fill=c["text"])
+        bx0, by0, bx1, by1 = self._cv.bbox(probe)
+        self._cv.delete(probe)
+        tw, th = bx1 - bx0, by1 - by0
+        self.bw = tw + self.PAD_X * 2 + 20
+        self.bh = th + self.PAD_Y * 2 + self.TAIL + 10
+        self.geometry(f"{int(self.bw)}x{int(self.bh)}")
+        self._cv.config(width=int(self.bw), height=int(self.bh))
+        x0, y0 = 10, 4
+        x1, y1 = 10 + tw + self.PAD_X * 2, y0 + th + self.PAD_Y * 2
+        self._round_rect(self._cv, x0, y0, x1, y1, 10,
+                         fill=c["bubble_bg"], outline=c["bubble_outline"])
+        self._cv.create_text((x0 + x1) / 2, (y0 + y1) / 2, text=text,
+                             font=("Microsoft YaHei", 9), fill=c["text"],
+                             justify="center")
+        cx = self._pet._win_w // 2 + 10          # 尾巴对准章鱼头顶
+        self._cv.create_polygon(cx - 7, y1 - 1, cx + 7, y1 - 1, cx, y1 + self.TAIL,
+                                fill=c["bubble_bg"], outline="")
+        self._cv.create_line(cx - 7, y1 - 1, cx, y1 + self.TAIL, cx + 7, y1 - 1,
+                             fill=c["bubble_outline"])
+        self.deiconify()
+        if self._auto:
+            try:
+                self.after_cancel(self._auto)
+            except Exception:
+                pass
+            self._auto = None
+        if ms:
+            self._auto = self.after(ms, self.hide)
+
+    def hide(self):
+        self._auto = None
+        try:
+            self.withdraw()
+        except tk.TclError:
+            pass
+
+    def follow(self, pet_x, pet_y):
+        self.geometry(f"+{int(pet_x + self._pet._win_w / 2 - self.bw / 2)}"
+                      f"+{int(pet_y - self.bh + 10)}")
+
+    @staticmethod
+    def _round_rect(cv, x1, y1, x2, y2, r, **kw):
+        pts = [x1 + r, y1, x2 - r, y1, x2, y1, x2, y1 + r, x2, y2 - r,
+               x2, y2, x2 - r, y2, x1 + r, y2, x1, y2, x1, y2 - r,
+               x1, y1 + r, x1, y1]
+        return cv.create_polygon(pts, smooth=True, **kw)
+
+
 # ==========================================================================
 #  桌宠窗口
 # ==========================================================================
 
 class DesktopPet(tk.Toplevel):
-    """悬浮在桌面上的墨墨：无边框、真透明、可穿透、会上下浮动。"""
+    """悬浮在桌面上的墨墨：物理引擎 + 系统联动 + 番茄钟。"""
 
     def __init__(self, master, image_path=None, full_through=False):
         super().__init__(master)
@@ -297,118 +440,349 @@ class DesktopPet(tk.Toplevel):
         self.overrideredirect(True)
         self.config(bg=KEY_COLOR)
         self.attributes("-transparentcolor", KEY_COLOR)
-        self.attributes("-topmost", True)       # 置顶
+        self.attributes("-topmost", True)
 
-        # ---- 图片（睁眼默认形态 + 点击时的眯眼笑形态）----
+        # ---- 2) 表情库 ----
         base = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                             "assets")
-        self._photo = load_pet(self, image_path or default_image_path(), PET_SIZE) \
+        self._faces = {}
+        idle = load_pet(self, image_path or default_image_path(), PET_SIZE) \
             or load_pet_fallback(self, PET_SIZE)
-        if self._photo is None:                 # 图片缺失时画一只兜底章鱼
-            self._photo = self._fallback_photo()
-        happy_path = os.path.join(base, "momo-happy.png")
-        self._photo_happy = load_pet(self, happy_path, PET_SIZE) or self._photo
-        self._label = tk.Label(self, image=self._photo, bg=KEY_COLOR,
-                               bd=0, highlightthickness=0, cursor="fleur")
-        self._label.pack()
-        self.geometry(f"{PET_SIZE}x{PET_SIZE}")
+        if idle is None:
+            idle = self._fallback_photo()
+        self._faces["idle"] = idle
+        for key, name in FACE_FILES.items():
+            if key == "idle":
+                continue
+            photo = load_pet(self, os.path.join(base, name), PET_SIZE)
+            if photo is not None:
+                self._faces[key] = photo
+        self._face = "idle"
 
-        # ---- 位置 ----
-        sw, sh = screen_size()
-        self._base_x = max(0, sw - PET_SIZE - MARGIN_RIGHT)
-        self._base_y = max(0, sh - PET_SIZE - MARGIN_BOTTOM)
+        # ---- 3) 窗口与布局（图片底部居中，方便 Q 弹压缩）----
+        self._win_w = int(PET_SIZE * WIN_SCALE)
+        self._win_h = int(PET_SIZE * WIN_SCALE)
+        self._label = tk.Label(self, image=idle, bg=KEY_COLOR,
+                               bd=0, highlightthickness=0, cursor="hand2")
+        self._label.place(relx=0.5, rely=1.0, anchor="s")
+        self.geometry(f"{self._win_w}x{self._win_h}")
+
+        # ---- 位置 / 物理 ----
+        self._sw, self._sh = screen_size()
+        self._ground = float(max(0, work_area_height() - self._win_h - 40))
+        self.x = float(max(0, self._sw - self._win_w - MARGIN_RIGHT))
+        self.y = self._ground
+        self._base_y = self._ground      # 浮动中心
+        self.vx = self.vy = 0.0
+        self._mode = "float"          # float / drag / fall
+        self._squash = None           # (frames, t0)
         self._start = time.monotonic()
+        self._last_geo = None
         self._dragging = None
+        self._hist = []
+        self._run_dir = 1
         self.update_idletasks()
-        self.geometry(f"+{self._base_x}+{self._base_y}")
+        self.geometry(f"+{int(self.x)}+{int(self.y)}")
 
-        # ---- 2) 完全穿透 ----
+        # ---- 4) 完全穿透 ----
         self._hwnd = hwnd_of(self)
         self._full_through = False
         self.set_full_through(full_through)
 
-        # ---- 交互 ----
+        # ---- 交互 / 联动 ----
+        self._clicks = []
+        self._temp_until = 0.0        # 一次性表情（happy/shy）保持到这个时刻
         self._label.bind("<ButtonPress-1>", self._on_press)
         self._label.bind("<B1-Motion>", self._on_move)
         self._label.bind("<ButtonRelease-1>", self._on_release)
         self._label.bind("<Button-3>", self._popup)
-        self._label.bind("<Escape>", lambda e: self.on_close())
         self._build_menu()
 
-        # ---- 3) 浮动 ----
+        cfg = getattr(master, "cfg", None)
+        self._monitor_on = cfg.get_setting("pet_monitor", True) if cfg else True
+        self._physics_on = cfg.get_setting("pet_physics", True) if cfg else True
+        self._sys_state = "idle"
+
+        # ---- 气泡 ----
+        self._bubble = Bubble(self, self._bubble_colors())
+        self._bubble.follow(self.x, self.y)
+
         self._alive = True
         self._tick()
+        self._monitor_tick()
 
-    # ---------- 浮动 ----------
+    # ============================ 帧循环 ============================
     def _tick(self):
         if not self._alive:
             return
         try:
-            if self._dragging is None:
-                t = time.monotonic() - self._start
-                if FLOAT_AMPLITUDE > 0 and FLOAT_PERIOD > 0:
-                    phase = (t / FLOAT_PERIOD) * 2.0 * math.pi
-                    off = -FLOAT_AMPLITUDE * math.sin(phase)
-                else:
-                    off = 0
-                self.geometry(f"+{self._base_x}+{int(self._base_y + off)}")
+            self._step()
             self.after(max(8, int(1000 / FPS)), self._tick)
         except tk.TclError:
-            self._alive = False      # 已随主窗口销毁
+            self._alive = False
 
-    def set_speed(self, period, amplitude):
-        """运行时改速度：period 越大越慢，amplitude 是上下各多少像素。"""
-        global FLOAT_PERIOD, FLOAT_AMPLITUDE
-        FLOAT_PERIOD, FLOAT_AMPLITUDE = period, amplitude
-        self._start = time.monotonic()
+    def _step(self):
+        now = time.monotonic()
+        dt = 1.0 / FPS
 
-    # ---------- 拖动 ----------
-    # 注意：Toplevel 的 winfo_x() 是相对父窗口的坐标，必须用 winfo_rootx()
-    # 取屏幕坐标，否则和事件的 x_root 混用会导致拖动手感"跳位"。
-    def _on_press(self, e):
-        self._dragging = (e.x_root, e.y_root,
-                          self.winfo_rootx(), self.winfo_rooty())
+        if self._mode == "drag":
+            return                        # 位置由拖动事件驱动
 
-    def _on_move(self, e):
-        if self._dragging:
-            gx, gy, ox, oy = self._dragging
-            self._base_x = ox + (e.x_root - gx)
-            self._base_y = oy + (e.y_root - gy)
-            self.geometry(f"+{self._base_x}+{self._base_y}")
+        if self._squash is not None:      # 落地压缩动画进行中：物理暂停
+            frames, t0 = self._squash
+            # SQUASH_MS 是毫秒，monotonic 差是秒 —— 别搞混单位
+            i = int((now - t0) / (SQUASH_MS / 1000.0 / (len(frames) - 1)))
+            if i >= len(frames) - 1:
+                self._squash = None
+                self._show_face()
+            else:
+                self._label.config(image=frames[i])
+            return
 
-    def _on_release(self, e):
-        if self._dragging:
-            gx, gy = self._dragging[0], self._dragging[1]
-            moved = abs(e.x_root - gx) + abs(e.y_root - gy)
-            self._dragging = None
-            if moved < 6:               # 没怎么动 = 单击 → 开心一下
-                self.show_happy()
+        if self._mode == "float":
+            amp = 3 if self._face == "tired" else FLOAT_AMPLITUDE   # 疲惫时没力气
+            if amp > 0 and FLOAT_PERIOD > 0:
+                phase = ((now - self._start) / FLOAT_PERIOD) * 2.0 * math.pi
+                self.y = self._base_y - amp * math.sin(phase)
+            if self._face == "run":
+                self._run_step(dt)
+        elif self._mode == "fall":
+            self.vy += GRAVITY * dt
+            self.y += self.vy * dt
+            self.x += self.vx * dt
+            # 左右墙壁反弹
+            if self.x < 0:
+                self.x, self.vx = 0, -self.vx * RESTITUTION
+            elif self.x > self._sw - self._win_w:
+                self.x, self.vx = self._sw - self._win_w, -self.vx * RESTITUTION
+            # 触地
+            if self.y >= self._ground:
+                self.y = self._ground
+                impact = abs(self.vy)
+                if self._physics_on and impact > BOUNCE_STOP_V:
+                    self.vy = -impact * RESTITUTION
+                    self.vx *= 0.82
+                    self._play_squash(impact)
+                else:
+                    self.vy = 0.0
+                    self.vx = 0.0
+                    self._base_y = self._ground
+                    self._play_squash(impact)
+                    self._mode = "float"
 
-    # ---------- 表情 ----------
-    def set_happy_ms(self, ms):
-        """设置眯眼笑保持时长（毫秒）。"""
-        global HAPPY_MS
-        HAPPY_MS = ms
+        gx, gy = int(self.x), int(self.y)
+        if (gx, gy) != self._last_geo:
+            self.geometry(f"+{gx}+{gy}")
+            self._last_geo = (gx, gy)
+        if getattr(self, "_bubble", None) is not None:
+            self._bubble.follow(gx, gy)
+
+    def _run_step(self, dt):
+        """奔跑：横向往返，速度随网速加快。"""
+        speed = NET_RUN_SPEED
+        try:
+            from core import sysinfo
+            sp = sysinfo.net_speed()
+            if sp:
+                speed = NET_RUN_SPEED * (0.6 + min(3.0, sp[0] / NET_FAST))
+        except Exception:
+            pass
+        self.x += self._run_dir * speed * dt
+        if self.x <= MARGIN_X:
+            self.x, self._run_dir = MARGIN_X, 1
+        elif self.x >= self._sw - self._win_w - MARGIN_X:
+            self.x, self._run_dir = self._sw - self._win_w - MARGIN_X, -1
+
+    # ============================ Q 弹压缩 ============================
+    def _play_squash(self, impact=0.0):
+        """落地压缩动画：冲得越狠压得越扁、弹得越久。"""
+        base = self._faces.get("idle") or self._faces.get(self._face)
+        frames = []
+        seq = ((2, 3, 6, 5), (4, 5, 5, 4), (5, 4, 4, 5), (9, 8, 8, 9))
+        if impact <= 900:
+            seq = seq[:3]
+        for (a, b, cc, d) in seq:
+            try:
+                frames.append(squash(base, a, b, cc, d))
+            except tk.TclError:
+                frames.append(base)
+        frames.append(base)
+        self._squash = (frames, time.monotonic())
+        self._label.config(image=frames[0])
+
+    # ============================ 表情 ============================
+    def _show_face(self, name=None):
+        photo = self._faces.get(name or self._face) or self._faces["idle"]
+        try:
+            self._label.config(image=photo)
+        except tk.TclError:
+            pass
+
+    def _set_face(self, face):
+        if face not in self._faces:
+            face = "idle"
+        if face != self._face:
+            self._face = face
+            self._show_face(face)
 
     def show_happy(self):
-        """单击墨墨：眯眼笑一会儿，再变回睁眼。"""
-        if self._photo_happy is self._photo:
+        """单击：开心；3 秒内点满 5 次：害羞。"""
+        now = time.monotonic()
+        self._clicks = [t for t in self._clicks if now - t < 3.0] + [now]
+        if len(self._clicks) >= SHY_AFTER_CLICKS and "shy" in self._faces:
+            self._clicks = []
+            self._temp_until = now + SHY_MS / 1000.0
+            self._set_face("shy")
+            self._bubble.say("别、别摸啦，会化掉的… (害羞)", SHY_MS)
             return
-        self._label.config(image=self._photo_happy)
-        if getattr(self, "_happy_job", None):
-            self.after_cancel(self._happy_job)
-        self._happy_job = self.after(HAPPY_MS, self._back_to_open)
+        if "happy" in self._faces:
+            self._temp_until = now + HAPPY_MS / 1000.0
+            self._set_face("happy")
+            lines = ("耶！又被摸头啦", "好舒服~", "(开心地晃触手)")
+            self._bubble.say(lines[int(now) % len(lines)], HAPPY_MS)
 
-    def _back_to_open(self):
-        self._happy_job = None
+    # ============================ 系统联动 ============================
+    def _monitor_tick(self):
+        if not self._alive:
+            return
         try:
-            self._label.config(image=self._photo)
+            self._sample()
         except tk.TclError:
-            pass                        # 窗口已销毁
+            self._alive = False
+            return
+        self.after(int(MONITOR_PERIOD_S * 1000), self._monitor_tick)
 
-    # ---------- 右键菜单 ----------
+    def _sample(self):
+        if self._squash is not None:
+            return
+        if time.monotonic() < self._temp_until:
+            return                    # 开心 / 害羞等一次性表情还在播放
+
+        pomo = self._pomodoro()
+        if pomo:
+            m, s = divmod(max(0, int(pomo["end"] - time.time())), 60)
+            self._bubble.say(f"📚 番茄钟 {pomo['minutes']} 分钟\n"
+                             f"还剩 {m:02d}:{s:02d}，我陪你学习", 0)
+            self._set_face("study")
+            return
+
+        if not self._monitor_on:
+            self._bubble.hide()
+            self._set_face("idle")
+            return
+
+        state, tip = self._measure()
+        if state != self._sys_state:
+            self._sys_state = state
+            if tip:
+                self._bubble.say(tip, 3500)
+            elif state == "idle":
+                self._bubble.hide()
+        self._set_face(state)
+
+    def _measure(self):
+        """读系统指标 → (状态名, 气泡文案)。"""
+        try:
+            from core import sysinfo
+            cpu = sysinfo.cpu_percent()
+            mem = sysinfo.mem_info() or {}
+            load = mem.get("load", 0.0)
+            sp = sysinfo.net_speed()
+            down = sp[0] if sp else 0.0
+        except Exception:
+            return "idle", None
+        if cpu >= CPU_HOT:
+            return "hot", (f"🥵 CPU {cpu:.0f}%，好热呀…\n（吐舌头散热中）")
+        if load >= MEM_TIRED:
+            return "tired", (f"😵 内存负载 {load:.0f}%…\n走不动了，让电脑歇歇吧")
+        if down >= NET_FAST:
+            return "run", (f"🏃 网速 {down / 1024:.0f} KB/s！\n脚底抹油冲鸭——")
+        return "idle", None
+
+    # ============================ 番茄钟 ============================
+    def _pomodoro(self):
+        p = getattr(self._master, "pomodoro", None)
+        if p and time.time() < p.get("end", 0):
+            return p
+        return None
+
+    def _start_pomodoro(self):
+        start = getattr(self._master, "start_pomodoro", None)
+        if start:
+            start(45)
+
+    def _stop_pomodoro(self):
+        stop = getattr(self._master, "stop_pomodoro", None)
+        if stop:
+            stop()
+
+    # ============================ 拖动 / 抛出 ============================
+    def _on_press(self, e):
+        self._mode = "drag"
+        self._squash = None
+        self._dragging = (e.x_root, e.y_root,
+                          self.winfo_rootx(), self.winfo_rooty())
+        self._hist = [(time.monotonic(), e.x_root, e.y_root)]
+        if "happy" in self._faces:
+            self._show_face("happy")      # 被抓起来的瞬间会"笑"
+
+    def _on_move(self, e):
+        if not self._dragging:
+            return
+        gx, gy, ox, oy = self._dragging
+        self.x = ox + (e.x_root - gx)
+        self.y = oy + (e.y_root - gy)
+        self.geometry(f"+{int(self.x)}+{int(self.y)}")
+        self._last_geo = (int(self.x), int(self.y))
+        if getattr(self, "_bubble", None) is not None:
+            self._bubble.follow(int(self.x), int(self.y))
+        now = time.monotonic()
+        self._hist.append((now, e.x_root, e.y_root))
+        if len(self._hist) > 6:
+            self._hist.pop(0)
+
+    def _on_release(self, e):
+        if not self._dragging:
+            return
+        gx, gy = self._dragging[0], self._dragging[1]
+        self._dragging = None
+        moved = abs(e.x_root - gx) + abs(e.y_root - gy)
+        if moved < 6:                       # 没怎么动 = 单击 → 摸头互动
+            self.show_happy()
+            self._mode = "float"
+            self._base_y = self.y
+            self.vx = self.vy = 0.0
+            return
+        # 抛出：用最近几次位移的指数平均作为初速度
+        vx = vy = 0.0
+        for (t0, x0, y0), (t1, x1, y1) in zip(self._hist, self._hist[1:]):
+            dt = max(0.008, t1 - t0)
+            vx += ((x1 - x0) / dt - vx) * DRAG_SMOOTH
+            vy += ((y1 - y0) / dt - vy) * DRAG_SMOOTH
+        if self._physics_on:
+            self.vx = max(-MAX_LAUNCH, min(MAX_LAUNCH, vx))
+            self.vy = max(-MAX_LAUNCH, min(MAX_LAUNCH, vy))
+            self._mode = "fall" if (self.vy < -40 or abs(self.vx) > 60 or
+                                    self.y < self._ground) else "float"
+            if self._mode == "float":
+                self._base_y = self.y
+        else:
+            self._mode = "float"
+            self._base_y = self.y
+        self._show_face()
+
+    # ============================ 菜单 / 设置 ============================
     def _build_menu(self):
         self._menu = tk.Menu(self, tearoff=0)
+        self._menu.add_command(label="🍅 开始番茄钟（45 分钟）",
+                               command=self._start_pomodoro)
+        self._menu.add_command(label="⏹ 结束番茄钟",
+                               command=self._stop_pomodoro)
+        self._menu.add_separator()
+        self._menu.add_command(label="物理引擎：开/关",
+                               command=self._toggle_physics)
+        self._menu.add_command(label="系统联动：开/关",
+                               command=self._toggle_monitor)
         self._menu.add_command(label="完全穿透（不挡任何点击）",
                                command=lambda: self.set_full_through(
                                    not self._full_through))
@@ -422,23 +796,61 @@ class DesktopPet(tk.Toplevel):
         self._menu.add_command(label="浮动：静止",
                                command=lambda: self.set_speed(4.0, 0))
         self._menu.add_separator()
-        self._menu.add_command(label="眨眼：轻快", command=lambda: self.set_happy_ms(350))
-        self._menu.add_command(label="眨眼：标准", command=lambda: self.set_happy_ms(700))
-        self._menu.add_command(label="眨眼：慢悠悠", command=lambda: self.set_happy_ms(1200))
-        self._menu.add_separator()
         self._menu.add_command(label="收起墨墨", command=self.on_close)
 
     def _popup(self, e):
         self._menu.tk_popup(e.x_root, e.y_root)
 
+    def _cfg_set(self, key, val):
+        cfg = getattr(self._master, "cfg", None)
+        if cfg is not None:
+            cfg.set_setting(key, val)
+
+    def _toggle_physics(self):
+        self._physics_on = not self._physics_on
+        self._cfg_set("pet_physics", self._physics_on)
+        self._bubble.say("重力已" + ("恢复！" if self._physics_on else "关闭~"),
+                         2500)
+
+    def _toggle_monitor(self):
+        self._monitor_on = not self._monitor_on
+        self._cfg_set("pet_monitor", self._monitor_on)
+        self._bubble.say("系统联动已" + ("开启" if self._monitor_on else "关闭"),
+                         2500)
+
+    def set_speed(self, period, amplitude):
+        """运行时改速度：period 越大越慢，amplitude 是上下各多少像素。"""
+        global FLOAT_PERIOD, FLOAT_AMPLITUDE
+        FLOAT_PERIOD, FLOAT_AMPLITUDE = period, amplitude
+        self._start = time.monotonic()
+
     def set_full_through(self, enabled):
         self._full_through = enabled
         set_full_through(self._hwnd, enabled)
+        if getattr(self, "_bubble", None) is not None:
+            set_full_through(hwnd_of(self._bubble), enabled)
 
-    # ---------- 关闭 ----------
+    def _bubble_colors(self):
+        """气泡配色：跟随主窗口主题。"""
+        cfg = getattr(self._master, "cfg", None)
+        theme = cfg.get_setting("theme", "light") if cfg else "light"
+        try:
+            from gui.theme import THEMES
+            c = THEMES.get(theme, THEMES["light"])
+            return {"text": c["text"],
+                    "bubble_bg": c.get("menu_bg", "#ffffff"),
+                    "bubble_outline": c.get("divider", "#c8c8c8")}
+        except Exception:
+            return {"text": "#222222", "bubble_bg": "#ffffff",
+                    "bubble_outline": "#c8c8c8"}
+
     def on_close(self):
         """收起桌宠（通知主窗口同步按钮状态）。"""
         self._alive = False
+        try:
+            self._bubble.destroy()
+        except Exception:
+            pass
         try:
             cb = getattr(self._master, "_on_pet_closed", None)
             if cb:

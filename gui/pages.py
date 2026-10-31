@@ -36,7 +36,7 @@ PREVIEW_PAD = 3
 PREVIEW_COLS = 3
 MAX_PREVIEW = PREVIEW_COLS ** 2
 
-APP_VERSION = "v0.9"
+APP_VERSION = "v1.0"
 KIND_LABEL = {"shortcut": "快捷方式", "dir": "文件夹", "file": "文件"}
 
 
@@ -1092,11 +1092,21 @@ class CountdownPage(BasePage):
 
     def _build(self):
         c = self.C
-        self._toolbar([("➕ 新建倒计时", self._add), ("🔄 刷新", self.refresh)])
+        self._toolbar([("➕ 新建倒计时", self._add),
+                       ("🍅 番茄钟 45 分钟", self._start_pomo),
+                       ("🔄 刷新", self.refresh)])
         self.body = tk.Frame(self, bg=c["app_bg"])
         self.body.pack(fill="both", expand=True, padx=16, pady=(0, 12))
         self.refresh()
         self._job = self.after(self.REFRESH_MS, self._auto)
+
+    def _start_pomo(self):
+        """开启番茄钟：墨墨进入伴学状态。"""
+        self.app.start_pomodoro(45)
+        messagebox.showinfo("🍅 番茄钟已开始",
+                            "专注 45 分钟！召唤桌宠（⚙ 设置 → 桌面宠物）\n"
+                            "墨墨会捧着书陪你，头顶显示剩余时间。",
+                            parent=self.app)
 
     def _auto(self):
         self.refresh()
@@ -1334,9 +1344,38 @@ class SettingsPage(BasePage):
                             activebackground=c["panel_active"], bd=0,
                             padx=12, pady=4, command=lambda: self._pet(pet_btn))
         pet_btn.pack(side="left")
-        tk.Label(pet_row, text="墨墨会悬浮在桌面上，可拖动、点击会笑",
+        tk.Label(pet_row, text="墨墨会悬浮在桌面上：可拖拽抛掷（重力弹跳）、"
+                               "点击摸头会开心",
                  bg=c["app_bg"], fg=c["sidebar_muted"],
                  font=("Microsoft YaHei", 9)).pack(side="left", padx=10)
+
+        pomo_row = tk.Frame(self.body, bg=c["app_bg"])
+        pomo_row.pack(anchor="w", pady=4)
+        pomo_text = ("⏹ 结束番茄钟" if self.app.pomodoro
+                     else "🍅 开始番茄钟（45 分钟）")
+        tk.Button(pomo_row, text=pomo_text, font=("Microsoft YaHei", 10),
+                  relief="flat", bg=c["panel_bg"], fg=c["text"],
+                  activebackground=c["panel_active"], bd=0,
+                  padx=12, pady=4,
+                  command=self._toggle_pomodoro).pack(side="left")
+        tk.Label(pomo_row,
+                 text="开启后墨墨会捧着书陪你专注，头顶倒计时，到点提醒休息",
+                 bg=c["app_bg"], fg=c["sidebar_muted"],
+                 font=("Microsoft YaHei", 9)).pack(side="left", padx=10)
+
+        monitor_row = tk.Frame(self.body, bg=c["app_bg"])
+        monitor_row.pack(anchor="w", pady=4)
+        self._monitor_var = tk.BooleanVar(
+            value=bool(self.app.cfg.get_setting("pet_monitor", True)))
+        tk.Checkbutton(monitor_row, text="系统状态联动（CPU 高冒汗 / "
+                                         "内存不足疲惫 / 网速快奔跑）",
+                       variable=self._monitor_var, command=self._toggle_monitor,
+                       font=("Microsoft YaHei", 9),
+                       bg=c["app_bg"], fg=c["text"],
+                       selectcolor=c["panel_bg"],
+                       activebackground=c["app_bg"],
+                       activeforeground=c["text"],
+                       highlightthickness=0, bd=0).pack(side="left")
 
         self._section("侧边栏")
         sb_row = tk.Frame(self.body, bg=c["app_bg"])
@@ -1365,6 +1404,23 @@ class SettingsPage(BasePage):
                  font=("Microsoft YaHei", 11, "bold"), anchor="w").pack(
             fill="x", pady=(14, 4))
         hline(self.body, c["divider"], pady=(0, 8))
+
+    def _toggle_pomodoro(self):
+        if self.app.pomodoro:
+            self.app.stop_pomodoro()
+        else:
+            self.app.start_pomodoro(45)
+        self.app._show_page("settings")   # 重建页面以更新按钮文字
+
+    def _toggle_monitor(self):
+        self.app.cfg.set_setting("pet_monitor", self._monitor_var.get())
+        pet = getattr(self.app, "_pet", None)
+        if pet is not None:
+            pet._monitor_on = self._monitor_var.get()
+            if not self._monitor_var.get():
+                pet._bubble.hide()
+                pet._sys_state = "idle"
+                pet._set_face("idle")
 
     def _pick_theme(self):
         self.app._apply_theme(self.var.get())

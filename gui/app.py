@@ -46,13 +46,22 @@ class App(tk.Tk):
         super().__init__()
         self.title(APP_TITLE)
         self.config_mgr = ConfigManager()
+        self.cfg = self.config_mgr      # 简写别名（桌宠等模块用）
         self.theme_name = self.config_mgr.get_setting("theme", DEFAULT_THEME)
         self.C = get_theme(self.theme_name)
         self.collapsed = bool(self.config_mgr.get_setting("sidebar_collapsed", False))
         self._pet = None            # 桌面悬浮宠物（None = 未召唤）
+        self.pomodoro = None        # 番茄钟 {"end": 时间戳, "minutes": N}
+        self._pomo_job = None
         self.current_key = "home"
         self.current_page = None
         self._photos = []           # 头像等图片引用，防止被回收
+
+        try:
+            from core import sysinfo as _sysinfo
+            _sysinfo.prime()        # 预热 CPU / 网速采样基准
+        except Exception:
+            pass
 
         self.configure(bg=self.C["app_bg"])
         self._set_icon()
@@ -258,6 +267,42 @@ class App(tk.Tk):
         self._pet = None
         if self.current_key == "settings":
             self._show_page("settings")
+
+    # ---------------- 番茄钟 ----------------
+    def start_pomodoro(self, minutes=45):
+        """开启番茄钟：桌宠进入伴学状态，头顶显示倒计时。"""
+        import time as _t
+        self.pomodoro = {"end": _t.time() + minutes * 60, "minutes": minutes}
+        if self._pomo_job:
+            try:
+                self.after_cancel(self._pomo_job)
+            except Exception:
+                pass
+        self._pomo_job = self.after(minutes * 60 * 1000, self._pomodoro_done)
+
+    def stop_pomodoro(self):
+        self.pomodoro = None
+        if self._pomo_job:
+            try:
+                self.after_cancel(self._pomo_job)
+            except Exception:
+                pass
+            self._pomo_job = None
+
+    def _pomodoro_done(self):
+        """番茄钟到点：弹窗提醒 + 桌宠气泡庆祝。"""
+        self._pomo_job = None
+        mins = (self.pomodoro or {}).get("minutes", 45)
+        self.pomodoro = None
+        if self.pet_active():
+            try:
+                self._pet._bubble.say("🍅 番茄钟到啦！\n休息 5 分钟吧～", 8000)
+            except Exception:
+                pass
+        messagebox.showinfo(
+            "🍅 番茄钟结束",
+            f"专注 {mins} 分钟完成！\n\n站起来活动一下，休息 5 分钟吧～",
+            parent=self)
 
     # ---------------- 事件 ----------------
     def _on_f5(self, event=None):
