@@ -10,6 +10,7 @@ from tkinter import messagebox, simpledialog
 
 from core.scanner import scan_desktop, get_desktop_paths
 from core.icons import icon_png
+from core import sysinfo
 from gui.theme import (DEFAULT_THEME, THEMES, THEME_NAMES, get_theme, style_menu)
 from gui.widgets import (open_target, make_photo, rounded_rect, short_name,
                          center_window, hline, stat_bar, shrink)
@@ -725,7 +726,170 @@ class StatsPage(BasePage):
 
 
 # ======================================================================
-# 4. 设置页
+# 4. 系统监控页：CPU / 内存 / 网速（每秒刷新）
+# ======================================================================
+class SystemPage(BasePage):
+    key = "system"
+    title = "📈 系统监控"
+    subtitle = "CPU 占用率、内存剩余与实时网速"
+    INTERVAL = 1000        # 刷新间隔（毫秒）
+    HISTORY = 60           # 折线图保留的采样点数
+    GRAPH_H = 130          # 折线图高度
+    METER_W = 210          # 卡片内进度条宽度
+
+    def _build(self):
+        c = self.C
+        self._history = []
+        self._job = None
+
+        bar = self._toolbar([("🔄 立即刷新", self._tick)])
+        tk.Label(bar, text="每 1 秒自动刷新 · 数据来自 Windows 系统接口",
+                 bg=c["app_bg"], fg=c["sidebar_muted"],
+                 font=("Microsoft YaHei", 9)).pack(side="left")
+
+        body = tk.Frame(self, bg=c["app_bg"])
+        body.pack(fill="both", expand=True, padx=16, pady=(0, 12))
+
+        grid = tk.Frame(body, bg=c["app_bg"])
+        grid.pack(fill="x")
+        for i in range(3):
+            grid.grid_columnconfigure(i, weight=1)
+        self._cpu_val, self._cpu_meter, self._cpu_sub = self._card(grid, 0, "CPU 占用率")
+        self._mem_val, self._mem_meter, self._mem_sub = self._card(grid, 1, "内存剩余")
+        self._net_val, self._net_meter, self._net_sub = self._card(grid, 2, "实时网速")
+
+        tk.Label(body, text=f"CPU 使用率（最近 {self.HISTORY} 秒）",
+                 bg=c["app_bg"], fg=c["text"],
+                 font=("Microsoft YaHei", 11, "bold"), anchor="w").pack(
+            fill="x", pady=(14, 4))
+        self.graph = tk.Canvas(body, height=self.GRAPH_H, bg=c["card_bg"],
+                               highlightthickness=1,
+                               highlightbackground=c["divider"])
+        self.graph.pack(fill="x")
+
+        sysinfo.prime()                       # 建立采样基准
+        self._draw_graph()                    # 先画空网格
+        self._job = self.after(self.INTERVAL, self._tick)
+
+    def _card(self, parent, col, title):
+        """一张指标卡：标题 + 大数值 + 进度条 + 补充说明。"""
+        c = self.C
+        card = tk.Frame(parent, bg=c["card_bg"], highlightthickness=1,
+                        highlightbackground=c["divider"], padx=14, pady=12)
+        card.grid(row=0, column=col, padx=6, pady=6, sticky="nsew")
+        tk.Label(card, text=title, bg=c["card_bg"], fg=c["sidebar_muted"],
+                 font=("Microsoft YaHei", 9), anchor="w").pack(fill="x")
+        val = tk.Label(card, text="—", bg=c["card_bg"], fg=c["accent"],
+                       font=("Microsoft YaHei", 20, "bold"), anchor="w")
+        val.pack(fill="x", pady=(4, 2))
+        meter = tk.Canvas(card, width=self.METER_W, height=10,
+                          bg=c["stat_bar_bg"], highlightthickness=0, bd=0)
+        meter.pack(anchor="w", pady=4)
+        sub = tk.Label(card, text="", bg=c["card_bg"], fg=c["sidebar_muted"],
+                       font=("Microsoft YaHei", 9), anchor="w")
+        sub.pack(fill="x")
+        return val, meter, sub
+
+    def _set_meter(self, meter, ratio):
+        meter.delete("all")
+        r = 0.0 if ratio <= 0 else (1.0 if ratio >= 1 else ratio)
+        if r > 0:
+            meter.create_rectangle(0, 0, max(2, int(self.METER_W * r)), 10,
+                                   fill=self.C["stat_bar"], outline="")
+
+    def _tick(self):
+        """一次采样：更新三张卡片与折线图。"""
+        c = self.C
+        cpu = sysinfo.cpu_percent()
+        if cpu is None:
+            cpu = 0.0
+        self._history.append(cpu)
+        del self._history[:-self.HISTORY]
+
+        mem = sysinfo.mem_info()
+        speed = sysinfo.net_speed()
+
+        self._cpu_val.config(text=f"{cpu:.0f}%")
+        self._set_meter(self._cpu_meter, cpu / 100.0)
+        self._cpu_sub.config(text=f"逻辑处理器 {sysinfo.cpu_count()} 个")
+
+        if mem:
+            self._mem_val.config(text=sysinfo.fmt_bytes(mem["avail"]))
+            self._set_meter(self._mem_meter,
+                            (mem["used"] / mem["total"]) if mem["total"] else 0)
+            self._mem_sub.config(
+                text=f"已用 {sysinfo.fmt_bytes(mem['used'])} / "
+                     f"共 {sysinfo.fmt_bytes(mem['total'])}（{mem['load']}%）")
+        else:
+            self._mem_val.config(text="—")
+            self._mem_sub.config(text="无法读取内存信息")
+
+        if speed:
+            down, up = speed
+            self._net_val.config(text="↓ " + sysinfo.fmt_speed(down))
+            self._set_meter(self._net_meter, peak := max(down, up, 1.0) / (10 * 1024 * 1024))
+            rx, tx = sysinfo.net_counters()
+            self._net_sub.config(text=f"↑ {sysinfo.fmt_speed(up)}\n"
+                                      f"累计 ↓{sysinfo.fmt_bytes(rx)} · ↑{sysinfo.fmt_bytes(tx)}")
+        else:
+            self._net_val.config(text="↓ —")
+            self._net_sub.config(text="采样中…")
+
+        self._draw_graph()
+        self.app.update_topbar(f"CPU {cpu:.0f}% · "
+                               + (f"内存可用 {sysinfo.fmt_bytes(mem['avail'])}" if mem else ""))
+        self._job = self.after(self.INTERVAL, self._tick)
+
+    def _draw_graph(self):
+        """画 CPU 折线图（含 0/50/100% 网格线）。"""
+        c = self.C
+        cv = self.graph
+        w = max(240, cv.winfo_width())
+        h = self.GRAPH_H
+        cv.configure(width=w)
+        cv.delete("all")
+        y0, y1 = 12, h - 12          # 留上下边距
+        span = y1 - y0
+        # 网格线
+        for pct in (0, 50, 100):
+            y = y1 - span * pct / 100.0
+            cv.create_line(40, y, w - 8, y, fill=c["divider"])
+            cv.create_text(34, y, text=f"{pct}%", anchor="e",
+                           fill=c["sidebar_muted"], font=("Microsoft YaHei", 7))
+        hist = self._history
+        if len(hist) >= 2:
+            step = (w - 48) / float(self.HISTORY - 1)
+            pts = []
+            for i, v in enumerate(hist):
+                x = 40 + i * step
+                y = y1 - span * min(100.0, max(0.0, v)) / 100.0
+                pts.append((x, y))
+            poly = list(pts) + [(pts[-1][0], y1), (pts[0][0], y1)]
+            cv.create_polygon(poly, fill=c["stat_bar_bg"], outline="")
+            cv.create_line([p for pt in pts for p in pt], fill=c["stat_bar"], width=2)
+            cv.create_oval(pts[-1][0] - 3, pts[-1][1] - 3,
+                           pts[-1][0] + 3, pts[-1][1] + 3,
+                           fill=c["stat_bar"], outline="")
+            cv.create_text(w - 8, 12, text=f"当前 {hist[-1]:.0f}%", anchor="ne",
+                           fill=c["text"], font=("Microsoft YaHei", 9, "bold"))
+        else:
+            cv.create_text(w // 2, h // 2, text="采集中…", fill=c["sidebar_muted"],
+                           font=("Microsoft YaHei", 10))
+
+    def destroy(self):
+        """页面销毁时停掉定时任务，避免回调打到已销毁的控件。"""
+        job = getattr(self, "_job", None)
+        if job is not None:
+            try:
+                self.after_cancel(job)
+            except Exception:
+                pass
+            self._job = None
+        super().destroy()
+
+
+# ======================================================================
+# 5. 设置页
 # ======================================================================
 class SettingsPage(BasePage):
     key = "settings"
@@ -804,5 +968,5 @@ class SettingsPage(BasePage):
         btn.config(text="🐙 收起宠物" if self.app.pet_active() else "🐙 召唤宠物")
 
 
-PAGES = (DesktopPage, CategoriesPage, StatsPage, SettingsPage)
+PAGES = (DesktopPage, CategoriesPage, StatsPage, SystemPage, SettingsPage)
 PAGE_BY_KEY = {p.key: p for p in PAGES}
