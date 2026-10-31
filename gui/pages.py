@@ -1153,20 +1153,24 @@ class CountdownPage(BasePage):
                         highlightbackground=c["accent"], padx=18, pady=16)
         card.pack(fill="x", pady=(6, 12))
 
+        left = tk.Frame(card, bg=c["card_bg"])
+        left.pack(side="left", fill="both", expand=True)
+
         num_color = c["accent"] if info["state"] != "past" else c["sidebar_muted"]
-        tk.Label(card, text=self._big_number(info), bg=c["card_bg"],
+        tk.Label(left, text=self._big_number(info), bg=c["card_bg"],
                  fg=num_color, font=("Microsoft YaHei", 30, "bold"),
                  anchor="w").pack(anchor="w")
-        tk.Label(card, text=item.get("title", ""), bg=c["card_bg"], fg=c["text"],
+        tk.Label(left, text=item.get("title", ""), bg=c["card_bg"], fg=c["text"],
                  font=("Microsoft YaHei", 14, "bold"), anchor="w").pack(anchor="w")
-        tk.Label(card, text=self._date_text(item, info), bg=c["card_bg"],
+        tk.Label(left, text=self._date_text(item, info), bg=c["card_bg"],
                  fg=c["sidebar_muted"], font=("Microsoft YaHei", 10),
                  anchor="w").pack(anchor="w", pady=(2, 0))
         if item.get("note"):
-            tk.Label(card, text=item["note"], bg=c["card_bg"],
+            tk.Label(left, text=item["note"], bg=c["card_bg"],
                      fg=c["sidebar_muted"], font=("Microsoft YaHei", 9),
                      anchor="w").pack(anchor="w")
-        self._progress_row(card, item)
+        self._progress_row(left, item)
+        self._actions(card, item, card)
 
     def _card(self, item):
         c = self.C
@@ -1195,15 +1199,39 @@ class CountdownPage(BasePage):
                      fg=c["sidebar_muted"], font=("Microsoft YaHei", 9),
                      anchor="w").pack(fill="x")
         self._progress_row(mid, item)
+        self._actions(card, item, card)
 
-        btns = tk.Frame(card, bg=c["card_bg"])
-        btns.pack(side="right")
-        for text, cmd in (("编辑", lambda: self._edit(item["id"])),
-                          ("删除", lambda: self._delete(item["id"]))):
+    def _actions(self, parent, item, card=None):
+        """卡片右侧的编辑 / 删除按钮（置顶大卡和普通卡片共用）。
+
+        card 非空时，整张卡片及其子控件再挂一个右键菜单，方便直接操作。
+        """
+        c = self.C
+        cid = item.get("id")
+        btns = tk.Frame(parent, bg=c["card_bg"])
+        btns.pack(side="right", anchor="n")
+        # 注意：必须用默认参数锁住 cid，否则 lambda 捕获循环变量会删错条目
+        acts = (("编辑", lambda cid=cid: self._edit(cid)),
+                ("删除", lambda cid=cid: self._delete(cid)))
+        for text, cmd in acts:
             tk.Button(btns, text=text, font=("Microsoft YaHei", 9),
                       relief="flat", bg=c["panel_bg"], fg=c["text"],
                       activebackground=c["panel_active"], bd=0,
                       padx=10, pady=3, command=cmd).pack(side="left", padx=3)
+
+        if card is None:
+            return
+        menu = tk.Menu(card, tearoff=0)
+        style_menu(menu, c)
+        for text, cmd in acts:
+            menu.add_command(label=text, command=cmd)
+        self._bind_menu(card, menu)
+
+    def _bind_menu(self, widget, menu):
+        """右键菜单绑定到整张卡片（含所有子控件）。"""
+        widget.bind("<Button-3>", lambda e: menu.tk_popup(e.x_root, e.y_root))
+        for w in widget.winfo_children():
+            self._bind_menu(w, menu)
 
     @staticmethod
     def _big_number(info) -> str:
