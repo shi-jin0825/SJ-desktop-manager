@@ -825,12 +825,13 @@ class SystemPage(BasePage):
             self._mem_sub.config(text="无法读取内存信息")
 
         if speed:
-            down, up = speed
+            down, up, ifname = speed
             self._net_val.config(text="↓ " + sysinfo.fmt_speed(down))
-            self._set_meter(self._net_meter, peak := max(down, up, 1.0) / (10 * 1024 * 1024))
-            rx, tx = sysinfo.net_counters()
+            self._set_meter(self._net_meter, max(down, up, 1.0) / (10 * 1024 * 1024))
+            rx, tx, _ = sysinfo.net_counters()
+            who = f"{ifname} · " if ifname else ""
             self._net_sub.config(text=f"↑ {sysinfo.fmt_speed(up)}\n"
-                                      f"累计 ↓{sysinfo.fmt_bytes(rx)} · ↑{sysinfo.fmt_bytes(tx)}")
+                                      f"{who}累计 ↓{sysinfo.fmt_bytes(rx)} ↑{sysinfo.fmt_bytes(tx)}")
         else:
             self._net_val.config(text="↓ —")
             self._net_sub.config(text="采样中…")
