@@ -4,6 +4,8 @@
 每个页面都是 tk.Frame，由 gui.app.App（主框架）按需创建并切换。
 页面统一通过 self.app 访问主题配色、配置和桌宠等全局能力。
 """
+import calendar
+import datetime as dt
 import os
 import tkinter as tk
 from tkinter import messagebox, simpledialog
@@ -918,13 +920,13 @@ class CountdownDialog(tk.Toplevel):
 
         self.var_title = tk.StringVar(value=self.item.get("title", ""))
         self.var_date = tk.StringVar(
-            value=self.item.get("date") or cd.fmt_date(cd.quick_date(30)))
+            value=self.item.get("date") or cd.fmt_date(cd.today()))
         self.var_note = tk.StringVar(value=self.item.get("note", ""))
         self.var_repeat = tk.BooleanVar(value=bool(self.item.get("repeat")))
 
         self._row(form, "标题", self.var_title, 0)
         self._date_row(form, 1)
-        self._row(form, "备注", self.var_note, 2)
+        self._row(form, "备注", self.var_note, 3)
 
         tk.Checkbutton(self, text="每年循环（生日 / 纪念日）",
                        variable=self.var_repeat,
@@ -964,28 +966,101 @@ class CountdownDialog(tk.Toplevel):
         parent.grid_columnconfigure(1, weight=1)
 
     def _date_row(self, parent, row):
+        """日期改为年 / 月 / 日三个滚轮（Spinbox），天数上限随年月自动调整。"""
         c = self.C
         tk.Label(parent, text="日期", width=5, anchor="w",
                  bg=c["dialog_bg"], fg=c["sidebar_muted"],
                  font=("Microsoft YaHei", 10)).grid(row=row, column=0, pady=6)
         cell = tk.Frame(parent, bg=c["dialog_bg"])
         cell.grid(row=row, column=1, sticky="ew", pady=6, padx=(8, 0))
-        tk.Entry(cell, textvariable=self.var_date, width=14,
-                 font=("Microsoft YaHei", 10), relief="flat",
-                 bg=c["panel_bg"], fg=c["text"],
-                 insertbackground=c["text"],
-                 highlightthickness=1,
-                 highlightbackground=c["divider"]).pack(side="left")
-        for text, days in (("今天", 0), ("+7天", 7), ("+30天", 30), ("+100天", 100)):
-            tk.Button(cell, text=text, font=("Microsoft YaHei", 8),
-                      relief="flat", bg=c["panel_bg"], fg=c["sidebar_muted"],
-                      activebackground=c["panel_active"], bd=0, padx=5, pady=2,
-                      command=lambda d=days: self.var_date.set(
-                          cd.fmt_date(cd.quick_date(d)))).pack(side="left", padx=2)
-        tk.Label(parent, text="格式 YYYY-MM-DD", bg=c["dialog_bg"],
-                 fg=c["sidebar_muted"],
-                 font=("Microsoft YaHei", 8)).grid(row=row + 1, column=1,
-                                                   sticky="w", padx=(8, 0))
+
+        today = cd.today()
+        cur = cd.parse_date(self.item.get("date")) or today
+        lo_year = min(1970, cur.year)
+
+        kw = dict(font=("Microsoft YaHei", 11), width=5, justify="center",
+                  relief="flat", bd=0, bg=c["panel_bg"], fg=c["text"],
+                  buttonbackground=c["panel_bg"],
+                  insertbackground=c["text"],
+                  highlightthickness=1,
+                  highlightbackground=c["divider"],
+                  highlightcolor=c["accent"])
+
+        self.var_y = tk.StringVar(value=str(cur.year))
+        self.var_m = tk.StringVar(value=str(cur.month))
+        self.var_d = tk.StringVar(value=str(cur.day))
+        self.spin_y = tk.Spinbox(cell, from_=lo_year, to=today.year + 60,
+                                 textvariable=self.var_y, **kw)
+        self.spin_m = tk.Spinbox(cell, from_=1, to=12, wrap=True,
+                                 textvariable=self.var_m, **kw)
+        self.spin_d = tk.Spinbox(cell, from_=1, to=31, wrap=True,
+                                 textvariable=self.var_d, **kw)
+        # 三个滚轮都建好后才挂监听，否则构造 spinbox 时会提前触发回调
+        for v in (self.var_y, self.var_m, self.var_d):
+            v.trace_add("write", self._sync_date)
+
+        self.spin_y.pack(side="left")
+        tk.Label(cell, text="年", bg=c["dialog_bg"], fg=c["sidebar_muted"],
+                 font=("Microsoft YaHei", 9)).pack(side="left", padx=(3, 8))
+        self.spin_m.pack(side="left")
+        tk.Label(cell, text="月", bg=c["dialog_bg"], fg=c["sidebar_muted"],
+                 font=("Microsoft YaHei", 9)).pack(side="left", padx=(3, 8))
+        self.spin_d.pack(side="left")
+        tk.Label(cell, text="日", bg=c["dialog_bg"], fg=c["sidebar_muted"],
+                 font=("Microsoft YaHei", 9)).pack(side="left", padx=(3, 8))
+
+        tk.Button(cell, text="今天", font=("Microsoft YaHei", 9),
+                  relief="flat", bg=c["panel_bg"], fg=c["sidebar_muted"],
+                  activebackground=c["panel_active"], bd=0, padx=8, pady=3,
+                  command=self._set_today).pack(side="left")
+
+        self._week_label = tk.Label(parent, text="", bg=c["dialog_bg"],
+                                    fg=c["sidebar_muted"],
+                                    font=("Microsoft YaHei", 9))
+        self._week_label.grid(row=row + 1, column=1, sticky="w", padx=(8, 0))
+        self._sync_date()
+
+    def _set_today(self):
+        t = cd.today()
+        self.var_y.set(str(t.year))
+        self.var_m.set(str(t.month))
+        self.var_d.set(str(t.day))
+
+    def _sync_date(self, *_):
+        """滚轮变化时重算：天数上限、纠正越界、同步完整日期与星期。"""
+        if not hasattr(self, "spin_d"):
+            return
+        try:
+            y = int(float(self.var_y.get()))
+            m = int(float(self.var_m.get()))
+            d = int(float(self.var_d.get()))
+        except (ValueError, tk.TclError):
+            return
+        try:
+            y_max = int(float(self.spin_y.cget("to")))
+        except (TypeError, ValueError):
+            y_max = 9999
+        y = max(1970, min(y_max, y))
+        m = max(1, min(12, m))
+        last = calendar.monthrange(y, m)[1]
+        self.spin_d.config(to=last)
+        if d > last:
+            d = last
+            self.var_d.set(str(d))
+        elif d < 1:
+            d = 1
+            self.var_d.set(str(d))
+        try:
+            date = dt.date(y, m, d)
+        except ValueError:
+            return
+        self.var_date.set(cd.fmt_date(date))
+        self._week_label.config(text=f"{cd.weekday_cn(date)} · 还有 "
+                                     f"{cd.days_until(date, cd.today())} 天"
+                                     if date > cd.today()
+                                     else (cd.weekday_cn(date) + " · 就是今天"
+                                           if date == cd.today()
+                                           else cd.weekday_cn(date)))
 
     def _save(self):
         title = self.var_title.get().strip()
