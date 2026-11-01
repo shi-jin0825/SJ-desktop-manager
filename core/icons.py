@@ -221,6 +221,25 @@ def _rgba_via_shgetfileinfo(path: str, attrs: int, size: int):
 _PNG_CACHE = {}
 _RGBA_CACHE = {}
 
+# 缓存上限：桌面项极多时不让内存只增不减（超出后丢掉最早用过的那批）
+CACHE_LIMIT = 400
+
+
+def _bump(cache, key, value):
+    """写入缓存并在超限时做 LRU 淘汰（dict 保持插入顺序）。"""
+    cache.pop(key, None)          # 重新插入到末尾 = 最近使用
+    cache[key] = value
+    over = len(cache) - CACHE_LIMIT
+    if over > 0:
+        for k in list(cache)[:over]:
+            del cache[k]
+    return value
+
+
+def cache_sizes():
+    """当前缓存条目数（调试 / 自检用）。"""
+    return {"png": len(_PNG_CACHE), "rgba": len(_RGBA_CACHE)}
+
 
 def icon_rgba(path: str, size: int = 48):
     """取图标原始像素，返回 (w, h, RGBA bytes)；失败返回 None。"""
@@ -228,7 +247,9 @@ def icon_rgba(path: str, size: int = 48):
         return None
     key = (os.path.abspath(path).lower(), size)
     if key in _RGBA_CACHE:
-        return _RGBA_CACHE[key]
+        got = _RGBA_CACHE.pop(key)      # 命中就挪到末尾（LRU）
+        _RGBA_CACHE[key] = got
+        return got
     got = None
     try:
         got = _rgba_via_factory(path, size)
@@ -236,7 +257,7 @@ def icon_rgba(path: str, size: int = 48):
             got = _rgba_via_shgetfileinfo(str(path), 0, min(size, 32))
     except Exception:
         got = None
-    _RGBA_CACHE[key] = got
+    _bump(_RGBA_CACHE, key, got)
     return got
 
 
@@ -246,10 +267,12 @@ def icon_png(path: str, size: int = 48):
         return None
     key = (os.path.abspath(path).lower(), size)
     if key in _PNG_CACHE:
-        return _PNG_CACHE[key]
+        png = _PNG_CACHE.pop(key)
+        _PNG_CACHE[key] = png
+        return png
     got = icon_rgba(path, size)
-    _PNG_CACHE[key] = png_from_rgba(got[2], got[0], got[1]) if got else None
-    return _PNG_CACHE[key]
+    return _bump(_PNG_CACHE, key,
+                 png_from_rgba(got[2], got[0], got[1]) if got else None)
 
 
 def folder_icon_png(size: int = 48):
@@ -266,8 +289,8 @@ def folder_icon_png(size: int = 48):
             got = _rgba_via_shgetfileinfo("folder", FILE_ATTRIBUTE_DIRECTORY, 32)
     except Exception:
         got = None
-    _PNG_CACHE[key] = png_from_rgba(got[2], got[0], got[1]) if got else None
-    return _PNG_CACHE[key]
+    return _bump(_PNG_CACHE, key,
+                 png_from_rgba(got[2], got[0], got[1]) if got else None)
 
 
 def clear_cache():

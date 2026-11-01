@@ -10,10 +10,12 @@ import os
 # 保证以任意工作目录启动时都能找到 core/gui 包
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from gui.app import App
+from core.dpi import enable_dpi_awareness    # 必须在创建任何窗口前调用
 
 
 def main():
+    enable_dpi_awareness()
+    from gui.app import App
     app = App()
     app.mainloop()
 

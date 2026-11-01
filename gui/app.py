@@ -299,12 +299,18 @@ class App(tk.Tk):
             messagebox.showinfo("搜索", "没有找到匹配的项目～", parent=self)
 
     def _nav_buttons(self):
-        """中部导航菜单。"""
+        """中部导航菜单（单独一个容器，切页时只重建这里）。"""
         c = self.C
-        nav = tk.Frame(self.sidebar, bg=c["sidebar_bg"])
-        nav.pack(fill="x", pady=4)
+        self._nav_frame = tk.Frame(self.sidebar, bg=c["sidebar_bg"])
+        self._nav_frame.pack(fill="x", pady=4)
+        self._render_nav_items()
+
+    def _render_nav_items(self):
+        """画出导航条目（切页时只重画这几条，搜索框和用户区不受影响）。"""
+        for w in self._nav_frame.winfo_children():
+            w.destroy()
         for key, icon, label in NAV_ITEMS:
-            self._nav_item(nav, key, icon, label)
+            self._nav_item(self._nav_frame, key, icon, label)
 
     def _nav_item(self, parent, key, icon, label):
         """一条导航：线性图标 + 文字，选中项左侧有强调色竖条。"""
@@ -397,24 +403,65 @@ class App(tk.Tk):
             ic.bind("<Leave>", lambda e, i=ic: i.set_color(normal_fg))
 
     # ---------------- 页面路由 ----------------
-    def _show_page(self, key: str):
-        """切换右侧主内容区显示的页面。"""
+    def _show_page(self, key: str, force: bool = False):
+        """切换右侧主内容区显示的页面。
+
+        页面实例会被缓存：切走时只是 pack_forget（不再销毁重建），
+        切回来时再 pack 出来。好处是
+          · 不会每次点导航都重扫一遍桌面、重建搜索框（丢了输入焦点）；
+          · 系统监控页不会每次重新预热采样；
+          · 视觉上也不闪。
+        force=True 时强制重建（比如刚改完分类、需要彻底刷新的场合）。
+        """
         if key not in PAGE_BY_KEY:
             key = "home"
         self.current_key = key
         page_cls = PAGE_BY_KEY[key]
 
-        # 侧边栏高亮跟随切换
-        self.sidebar.destroy()
-        self._build_sidebar()
+        pages = getattr(self, "_pages", None)
+        if pages is None:
+            pages = self._pages = {}
+        page = pages.get(key)
+        if page is not None and force:
+            try:
+                page.destroy()
+            except tk.TclError:
+                pass
+            page = None
+        if page is None:
+            page = page_cls(self.content, self)
+            pages[key] = page
 
-        for w in self.content.winfo_children():
-            w.destroy()
-        page = page_cls(self.content, self)
+        for k, p in pages.items():
+            if p is page:
+                continue
+            try:
+                p.pack_forget()
+            except tk.TclError:
+                continue
+            hide = getattr(p, "on_hide", None)
+            if hide is not None:
+                try:
+                    hide()          # 比如系统监控页可以停掉采样定时器
+                except tk.TclError:
+                    pass
         page.pack(fill="both", expand=True)
         self.current_page = page
         self.page_title.config(text=page_cls.title)
         self.page_sub.config(text=page_cls.subtitle)
+
+        # 侧边栏只更新高亮（不再整体销毁重建，搜索框焦点得以保留）
+        if getattr(self, "_nav_frame", None) is not None:
+            try:
+                self._render_nav_items()
+            except tk.TclError:
+                pass
+
+        show = getattr(page, "on_show", None)
+        if show is not None:
+            show()
+        elif hasattr(page, "refresh"):
+            page.refresh()
 
     def update_topbar(self, text: str):
         """页面把自己的状态写回顶部标题条（如项目数量）。"""
@@ -448,6 +495,7 @@ class App(tk.Tk):
         self.sidebar = None
         self.main = None
         self.content = None
+        self._pages = {}        # 换主题等于整套重建，缓存的页面一并作废
         self._photos = []
         self._build_shell()
         self._show_page(self.current_key)

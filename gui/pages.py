@@ -29,6 +29,7 @@ MAX_COLS = 16       # 每行最多数量（窗口放大时自动增加）
 TILE_PADX = 8
 TILE_PADY = 8
 ICON_SIZE = 48      # 磁贴图标尺寸（px）
+ICONS_PER_TICK = 6  # 每帧最多提取几个系统图标（懒加载，防止首屏卡顿）
 TILE_HOVER = 6      # 鼠标悬停时磁贴放大的像素数
 
 # ---- 分类文件夹 3×3 预览 ----
@@ -57,31 +58,43 @@ class CategoryWindow(tk.Toplevel):
         self.cfg = config
         self.on_change = on_change
         self._photos = []
+        self.items = list(items)
 
-        tk.Label(self, text=f"📁 {category}（{len(items)} 项）",
-                 font=("Microsoft YaHei", 14, "bold"),
-                 bg=c["dialog_bg"], fg=c["text"]).pack(pady=10)
+        self.head = tk.Label(self, text="", font=("Microsoft YaHei", 14, "bold"),
+                             bg=c["dialog_bg"], fg=c["text"])
+        self.head.pack(pady=10)
+        self.frame = tk.Frame(self, bg=c["dialog_bg"])
+        self.frame.pack(fill="both", expand=True, padx=10, pady=5)
+        self._render()
 
-        frame = tk.Frame(self, bg=c["dialog_bg"])
-        frame.pack(fill="both", expand=True, padx=10, pady=5)
-        frame.grid_columnconfigure(tuple(range(COLS)), weight=1)
+    def _render(self):
+        """重建网格内容（移出某项后原地刷新，不再直接关窗）。"""
+        c = self.C
+        for w in self.frame.winfo_children():
+            w.destroy()
+        self._photos = []
+        items = self.items
+        self.head.config(text=f"📁 {self.category}（{len(items)} 项）")
+        self.frame.grid_columnconfigure(tuple(range(COLS)), weight=1)
 
         if not items:
-            tk.Label(frame, text="空空如也，右键桌面上的项目可移入此分类",
+            tk.Label(self.frame, text="空空如也，右键桌面上的项目可移入此分类",
                      bg=c["dialog_bg"], fg=c["text_muted"]).grid(
                 row=0, column=0, columnspan=COLS, pady=40)
+            return
 
         for idx, item in enumerate(items):
             icon = make_photo(icon_png(item.path, ICON_SIZE), self._photos)
             if icon:
-                btn = tk.Button(frame, image=icon, text=short_name(item.display_name),
+                btn = tk.Button(self.frame, image=icon,
+                                text=short_name(item.display_name),
                                 compound="top", font=("Microsoft YaHei", 9),
                                 width=90, height=86, relief="flat",
                                 bg=c["panel_bg"], fg=c["text"],
                                 activebackground=c["panel_active"],
                                 command=lambda p=item.path: open_target(p))
             else:
-                btn = tk.Button(frame, text=f"📄\n{short_name(item.display_name)}",
+                btn = tk.Button(self.frame, text=f"📄\n{short_name(item.display_name)}",
                                 font=("Microsoft YaHei", 9),
                                 width=10, height=4, relief="flat",
                                 bg=c["panel_bg"], fg=c["text"],
@@ -89,17 +102,19 @@ class CategoryWindow(tk.Toplevel):
                                 command=lambda p=item.path: open_target(p))
             btn.grid(row=idx // COLS, column=idx % COLS, padx=6, pady=6)
             menu = tk.Menu(btn, tearoff=0)
+            menu.add_command(label="打开", command=lambda p=item.path: open_target(p))
             menu.add_command(label="移出分类",
-                             command=lambda n=item.name: self._remove(n))
+                             command=lambda p=item.path: self._remove(p))
             style_menu(menu, c)
             btn.bind("<Button-3>", lambda e, m=menu: m.tk_popup(e.x_root, e.y_root))
 
-    def _remove(self, item_name: str):
-        """把项目移出当前分类，并同步刷新调用方。"""
-        self.cfg.unassign(item_name)
+    def _remove(self, item_path: str):
+        """把项目移出当前分类：窗口留着，方便继续整理下一项。"""
+        self.cfg.unassign(item_path)
+        self.items = [i for i in self.items if i.path != item_path]
+        self._render()
         if self.on_change:
             self.on_change()
-        self.destroy()
 
 
 class BasePage(tk.Frame):
@@ -122,6 +137,14 @@ class BasePage(tk.Frame):
         pass
 
     def refresh(self):
+        pass
+
+    # 页面被切走 / 切回时的钩子：默认就是刷新一次，
+    # 子类可以改成更省的做法（比如首页不重扫桌面、监控页停掉定时器）。
+    def on_show(self):
+        self.refresh()
+
+    def on_hide(self):
         pass
 
     def _toolbar(self, buttons, primary=None):
@@ -158,6 +181,11 @@ class DesktopPage(BasePage):
         self._cols_cfg = 0
         self._relayout_job = None
         self._scrollable = False
+        self.selected = set()      # 多选：存桌面项路径
+        self._anchor = None        # Shift 连选的起点
+        self._last_op = None       # 上一步批量操作（用于撤销）
+        self._icon_queue = []      # 待加载图标队列（懒加载，避免首屏卡顿）
+        self._icon_job = None
         super().__init__(master, app)
 
     def _build(self):
@@ -170,6 +198,10 @@ class DesktopPage(BasePage):
             ("pet", "桌面宠物" if not self.app.pet_active() else "收起宠物",
              self._pet_cmd),
         ], primary="新建分类")
+        # 批量操作条：有选中时才显形（占位框常驻，保证 pack 顺序稳定）
+        self.sel_host = tk.Frame(self, bg=c["app_bg"])
+        self.sel_host.pack(fill="x", padx=16, after=self.winfo_children()[0])
+        self._build_selbar()
         container = tk.Frame(self, bg=c["app_bg"])
         container.pack(fill="both", expand=True, padx=16, pady=(0, 12))
         self.canvas = tk.Canvas(container, bg=c["app_bg"], highlightthickness=0)
@@ -194,8 +226,137 @@ class DesktopPage(BasePage):
         self.canvas.bind("<Configure>", self._on_canvas_resize)
         self.refresh()
 
+    def on_show(self):
+        """切回首页只重排已有数据，不重新扫描桌面（F5 / 刷新按钮才重扫）。"""
+        self.refresh(rescan=not self.items)
+
     def _pet_cmd(self):
         self.app._toggle_pet()
+
+    # ---- 多选 / 批量整理 ----
+    def _build_selbar(self):
+        """选中若干磁贴后出现的批量操作条。"""
+        c = self.C
+        bar = tk.Frame(self.sel_host, bg=c["app_bg"])
+        self.selbar = bar
+        self.sel_label = tk.Label(bar, text="", bg=c["app_bg"], fg=c["accent"],
+                                  font=("Microsoft YaHei", 10, "bold"))
+        self.sel_label.pack(side="left", padx=(0, 10))
+
+        self.sel_menu = tk.Menu(self, tearoff=0)
+        style_menu(self.sel_menu, c)
+        ModernButton(bar, text="移入分类 ▾", command=self._popup_move, c=c,
+                     icon="folder", primary=True).pack(side="left", padx=(0, 8))
+        ModernButton(bar, text="移出分类", command=self._unassign_selected,
+                     c=c, icon="close").pack(side="left", padx=(0, 8))
+        ModernButton(bar, text="撤销上一步", command=self._undo,
+                     c=c, icon="refresh").pack(side="left", padx=(0, 8))
+        ModernButton(bar, text="取消选择", command=self._clear_selection,
+                     c=c, icon="close").pack(side="left")
+
+    def _popup_move(self):
+        menu = self.sel_menu
+        menu.delete(0, "end")
+        for cat in self.cfg.categories:
+            menu.add_command(label=f"移入「{cat}」（{len(self.selected)} 项）",
+                             command=lambda cc=cat: self._assign_selected(cc))
+        if not self.cfg.categories:
+            menu.add_command(label="（还没有分类）", state="disabled")
+        menu.tk_popup(self.winfo_pointerx(), self.winfo_pointery())
+
+    def _update_selbar(self):
+        n = len(self.selected)
+        shown = getattr(self, "_selbar_shown", False)
+        if n:
+            self.sel_label.config(text=f"已选 {n} 项")
+        if n and not shown:
+            self.selbar.pack(fill="x", pady=(0, 6))
+            self._selbar_shown = True
+        elif not n and shown:
+            self.selbar.pack_forget()
+            self._selbar_shown = False
+
+    def _toggle_select(self, path, on=None):
+        """Ctrl + 点击：把一项加入 / 移出选择。"""
+        if on is None:
+            on = path not in self.selected
+        if on:
+            self.selected.add(path)
+            self._anchor = path
+        else:
+            self.selected.discard(path)
+        self._refresh_selection()
+
+    def _range_select(self, path):
+        """Shift + 点击：从上一个锚点连选到这一项。"""
+        paths = [i.path for i in self.items]
+        if self._anchor in paths and path in paths:
+            a, b = paths.index(self._anchor), paths.index(path)
+            for p in paths[min(a, b):max(a, b) + 1]:
+                self.selected.add(p)
+        else:
+            self.selected.add(path)
+            self._anchor = path
+        self._refresh_selection()
+
+    def _clear_selection(self):
+        self.selected.clear()
+        self._anchor = None
+        self._refresh_selection()
+
+    def _refresh_selection(self):
+        """只改磁贴的选中边框，不整页重建（避免闪烁、也保住滚动位置）。"""
+        for slot in self.grid_frame.winfo_children():
+            for w in slot.winfo_children():
+                path = getattr(w, "_item_path", None)
+                if not path:
+                    continue
+                on = path in self.selected
+                try:
+                    w.configure(highlightthickness=2 if on else 0,
+                                highlightbackground=self.C["accent"],
+                                highlightcolor=self.C["accent"])
+                except tk.TclError:
+                    pass
+        self._update_selbar()
+
+    def _snapshot(self, paths):
+        """批量操作前记一份旧分类，供「撤销上一步」用。"""
+        self._last_op = [(p, self.cfg.get_category(p)) for p in paths]
+
+    def _assign_selected(self, category):
+        paths = list(self.selected)
+        if not paths:
+            return
+        self._snapshot(paths)
+        self.cfg.assign_batch(paths, category)
+        self._clear_selection()
+        self.refresh()
+
+    def _unassign_selected(self):
+        paths = list(self.selected)
+        if not paths:
+            return
+        self._snapshot(paths)
+        self.cfg.unassign_batch(paths)
+        self._clear_selection()
+        self.refresh()
+
+    def _undo(self):
+        """撤销上一步批量操作（把各项恢复成原来的分类）。"""
+        if not self._last_op:
+            messagebox.showinfo("撤销", "还没有可撤销的操作～", parent=self.app)
+            return
+        restores = {}
+        for path, cat in self._last_op:
+            restores.setdefault(cat or "", []).append(path)
+        for cat, paths in restores.items():
+            if cat:
+                self.cfg.assign_batch(paths, cat)
+            else:
+                self.cfg.unassign_batch(paths)
+        self._last_op = None
+        self.refresh()
 
     # ---- 自适应布局 ----
     def _on_grid_configure(self, event=None):
@@ -269,13 +430,24 @@ class DesktopPage(BasePage):
 
     # ---- 渲染 ----
     def refresh(self, rescan=True):
+        # 重建网格：旧队列作废（磁贴已经没了，别再往销毁的控件上塞图标）
+        self._icon_queue = []
+        if self._icon_job is not None:
+            try:
+                self.after_cancel(self._icon_job)
+            except tk.TclError:
+                pass
+            self._icon_job = None
         for w in self.grid_frame.winfo_children():
             w.destroy()
         self._photos = []
         if rescan or not self.items:
             self.items = scan_desktop()
+        # 旧配置（按文件名归类）就地升级成按路径；顺手清掉改名/移动留下的死条目
+        self.cfg.migrate_assignments(self.items)
+        self.cfg.prune_assignments([i.path for i in self.items])
         for item in self.items:
-            item.category = self.cfg.get_category(item.name)
+            item.category = self.cfg.get_category(item.path, item.name)
 
         # 全局搜索：按名称 / 分类过滤（搜索时不重新扫描桌面，避免卡顿）
         query = (getattr(self.app, "query", "") or "").strip().lower()
@@ -322,6 +494,9 @@ class DesktopPage(BasePage):
                 self._make_item_tile(row, col, item)
                 idx += 1
         self._on_grid_configure()
+        # 网格已经出来了，再慢慢补图标（用户先看到内容，不会干等）
+        if self._icon_queue and self._icon_job is None:
+            self._icon_job = self.after(30, self._pump_icons)
         if query:
             self.app.update_topbar(f"搜索「{self.app.query}」· {total} 个结果"
                                    f"（共 {len(self.items)} 项）")
@@ -443,44 +618,86 @@ class DesktopPage(BasePage):
         c = self.C
         slot = self._slot(row, col)
         shadow = self._shadow(slot)
-        icon = make_photo(icon_png(item.path, ICON_SIZE), self._photos)
-        if icon:
-            btn = tk.Button(slot,
-                            image=icon, text=short_name(item.display_name),
-                            compound="top", font=("Microsoft YaHei", 9),
-                            width=TILE_SIZE, height=TILE_H, relief="flat",
-                            bg=c["panel_bg"], fg=c["text"],
-                            activebackground=c["panel_active"],
-                            activeforeground=c["text"],
-                            command=lambda p=item.path: open_target(p))
-        else:
-            # 取不到系统图标时用 emoji 顶上；放一张透明图，让宽高按像素解释
-            emoji = {"dir": "🗂", "shortcut": "🧩", "file": "📄"}.get(item.kind, "📄")
-            blank = tk.PhotoImage(width=ICON_SIZE, height=ICON_SIZE)
-            self._photos.append(blank)
-            btn = tk.Button(slot,
-                            image=blank, text=f"{emoji}\n"
-                                              f"{short_name(item.display_name)}",
-                            compound="top", font=("Microsoft YaHei", 9),
-                            width=TILE_SIZE, height=TILE_H, relief="flat",
-                            bg=c["panel_bg"], fg=c["text"],
-                            activebackground=c["panel_active"],
-                            activeforeground=c["text"],
-                            command=lambda p=item.path: open_target(p))
+        name = short_name(item.display_name)
+        emoji = {"dir": "🗂", "shortcut": "🧩", "file": "📄"}.get(item.kind, "📄")
+        # 先占位（emoji + 透明图保证尺寸稳定），真实图标由 _pump_icons 异步补上
+        blank = tk.PhotoImage(width=ICON_SIZE, height=ICON_SIZE)
+        self._photos.append(blank)
+        btn = tk.Button(slot, image=blank, text=f"{emoji}\n{name}",
+                        compound="top", font=("Microsoft YaHei", 9),
+                        width=TILE_SIZE, height=TILE_H, relief="flat",
+                        bg=c["panel_bg"], fg=c["text"],
+                        activebackground=c["panel_active"],
+                        activeforeground=c["text"])
         btn.place(relx=0.5, rely=0.5, anchor="center",
                   width=TILE_SIZE, height=TILE_H)
+        btn._item_path = item.path        # 选中态用路径找回磁贴
+        if item.path in self.selected:
+            btn.configure(highlightthickness=2, highlightbackground=c["accent"],
+                          highlightcolor=c["accent"])
         menu = tk.Menu(btn, tearoff=0)
+        if len(self.selected) > 1 and item.path in self.selected:
+            for cat in self.cfg.categories:
+                menu.add_command(label=f"把选中的 {len(self.selected)} 项移入「{cat}」",
+                                 command=lambda cc=cat: self._assign_selected(cc))
+            menu.add_separator()
         for cat in self.cfg.categories:
             menu.add_command(label=f"移入「{cat}」",
-                             command=lambda n=item.name, cc=cat: self._assign(n, cc))
+                             command=lambda p=item.path, cc=cat: self._assign(p, cc))
         menu.add_separator()
-        menu.add_command(label="移出当前分类", command=lambda: self._unassign(item.name))
+        menu.add_command(label="移出当前分类",
+                         command=lambda p=item.path: self._unassign(p))
+        menu.add_separator()
+        menu.add_command(label="打开", command=lambda p=item.path: open_target(p))
         style_menu(menu, c)
         btn.bind("<Button-3>", lambda e, m=menu: m.tk_popup(e.x_root, e.y_root))
+        btn.bind("<Button-1>", lambda e, p=item.path: self._on_tile_click(e, p))
         enter, leave = hover_card(btn, (), c, c["panel_bg"], c["panel_active"],
                                   grow=TILE_HOVER, shadow=shadow, slot=slot)
         btn.bind("<Enter>", enter)
         btn.bind("<Leave>", leave)
+        # 排进图标加载队列（取不到系统图标时就一直用 emoji 占位）
+        self._queue_icon(item.path, ICON_SIZE, self._tile_icon_setter(btn, name))
+
+    # ---- 图标懒加载 ----
+    def _queue_icon(self, path, size, setter):
+        self._icon_queue.append((path, size, setter))
+
+    @staticmethod
+    def _tile_icon_setter(btn, name):
+        def set_icon(photo):
+            try:
+                btn.configure(image=photo, text=name)
+            except tk.TclError:
+                pass          # 磁贴已经在这次渲染里被销毁了
+        return set_icon
+
+    def _pump_icons(self):
+        """每帧只提取几个图标：桌面项很多时不会一上来卡住整个界面。"""
+        todo = self._icon_queue
+        if not todo:
+            self._icon_job = None
+            return
+        for _ in range(ICONS_PER_TICK):
+            if not todo:
+                break
+            path, size, setter = todo.pop(0)
+            photo = make_photo(icon_png(path, size), self._photos)
+            if photo is not None:
+                setter(photo)
+        self._icon_job = self.after(1, self._pump_icons)
+
+    def _on_tile_click(self, event, path):
+        """左键：Ctrl / Shift 是框选，平时直接打开（有选中时改为增减选择）。"""
+        state = getattr(event, "state", 0)
+        if state & 0x0004:                       # Control
+            self._toggle_select(path)
+        elif state & 0x0001:                     # Shift
+            self._range_select(path)
+        elif self.selected:
+            self._toggle_select(path)
+        else:
+            open_target(path)
 
     # ---- 动作 ----
     def _open_category(self, category):
@@ -488,12 +705,14 @@ class DesktopPage(BasePage):
         CategoryWindow(self.app, category, items, self.cfg,
                        on_change=self.refresh, theme=self.C)
 
-    def _assign(self, item_name, category):
-        self.cfg.assign(item_name, category)
+    def _assign(self, path, category):
+        self._snapshot([path])
+        self.cfg.assign(path, category)
         self.refresh()
 
-    def _unassign(self, item_name):
-        self.cfg.unassign(item_name)
+    def _unassign(self, path):
+        self._snapshot([path])
+        self.cfg.unassign(path)
         self.refresh()
 
     def _add_category(self):
@@ -647,7 +866,7 @@ class CategoriesPage(BasePage):
         self._photos = []
         self.items = scan_desktop()
         for item in self.items:
-            item.category = self.cfg.get_category(item.name)
+            item.category = self.cfg.get_category(item.path, item.name)
 
         if not self.cfg.categories:
             tk.Label(self.body, text="还没有分类，点右上角「➕ 新建分类」创建第一个",
@@ -754,7 +973,7 @@ class StatsPage(BasePage):
             w.destroy()
         items = scan_desktop()
         for i in items:
-            i.category = self.cfg.get_category(i.name)
+            i.category = self.cfg.get_category(i.path, i.name)
         done = sum(1 for i in items if i.category)
         total = len(items)
 
@@ -858,7 +1077,26 @@ class SystemPage(BasePage):
 
         sysinfo.prime()                       # 建立采样基准
         self._draw_graph()                    # 先画空网格
-        self._job = self.after(self.INTERVAL, self._tick)
+
+    def on_show(self):
+        """切回本页时重启采样（切走时已停掉，不在后台空转）。"""
+        self._start_timer()
+
+    def on_hide(self):
+        self._stop_timer()
+
+    def _start_timer(self):
+        if self._job is None:
+            self._tick()
+        return
+
+    def _stop_timer(self):
+        if self._job is not None:
+            try:
+                self.after_cancel(self._job)
+            except tk.TclError:
+                pass
+            self._job = None
 
     def _card(self, parent, col, title):
         """一张指标卡：标题 + 大数值 + 进度条 + 补充说明。"""

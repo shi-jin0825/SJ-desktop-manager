@@ -52,14 +52,18 @@ def get_desktop_paths() -> list:
 
 
 def scan_desktop() -> list:
-    """扫描桌面，返回 DesktopItem 列表。"""
+    """扫描桌面，返回 DesktopItem 列表。
+
+    同一个桌面内不会重复；用户桌面与公共桌面的同名项目是两份不同的东西，
+    所以都保留（早先按 name 全局去重会让后者被前者顶掉，整理时就会漏项）。
+    """
     items = []
-    seen = set()
     for desktop in get_desktop_paths():
+        seen_here = set()
         for entry in os.scandir(desktop):
-            if entry.name in seen:
+            if entry.name in seen_here:
                 continue
-            seen.add(entry.name)
+            seen_here.add(entry.name)
             if _is_hidden(entry.path):
                 continue
             if entry.name.lower().endswith((".lnk", ".url")):
@@ -69,5 +73,5 @@ def scan_desktop() -> list:
             else:
                 kind = "file"
             items.append(DesktopItem(name=entry.name, path=entry.path, kind=kind))
-    items.sort(key=lambda i: i.display_name.lower())
+    items.sort(key=lambda i: (i.display_name.lower(), i.path.lower()))
     return items

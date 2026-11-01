@@ -1,5 +1,15 @@
 __pycache__/
 *.pyc
-config.json
 .vscode/
 .idea/
+
+# 用户数据（含个人分类与倒计时）与备份
+config.json
+config.json.bak
+config.json.tmp
+config.json.corrupt-*
+
+# PyInstaller 产物
+build/
+dist/
+*.spec

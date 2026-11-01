@@ -42,6 +42,7 @@ WIN_SCALE = 1.45             # 窗口相对图片的放大倍数（容纳 Q 弹�
 FLOAT_AMPLITUDE = 8          # 浮动幅度（0 = 静止）
 FLOAT_PERIOD = 4.0           # 浮动周期（秒），越大越慢
 FPS = 60                     # 动画帧率
+MAX_DT = 0.05                # 单帧最大步长（秒）：卡顿后不跳穿，也不变慢动作
 
 GRAVITY = 2200.0             # 重力加速度 px/s²
 RESTITUTION = 0.42           # 反弹恢复系数（0~1，越大弹得越久）
@@ -503,6 +504,16 @@ class DesktopPet(tk.Toplevel):
         self._physics_on = cfg.get_setting("pet_physics", True) if cfg else True
         self._sys_state = "idle"
 
+        # 上次选的浮动节奏（慢悠悠 / 悠闲 / 轻快 / 静止）
+        if cfg is not None:
+            try:
+                period = float(cfg.get_setting("pet_float_period", FLOAT_PERIOD))
+                amp = float(cfg.get_setting("pet_float_amplitude",
+                                            FLOAT_AMPLITUDE))
+            except (TypeError, ValueError):
+                period, amp = FLOAT_PERIOD, FLOAT_AMPLITUDE
+            self.set_speed(period, amp, remember=False)
+
         # ---- 番茄钟 ----
         self._pomo_showing = False    # 当前气泡是否在显示番茄钟倒计时
         self._celebrating = False     # 番茄钟结束后短暂的庆祝气泡
@@ -527,8 +538,21 @@ class DesktopPet(tk.Toplevel):
             self._alive = False
 
     def _step(self):
+        """一帧物理。
+
+        dt 用「真实经过的时间」而不是固定 1/FPS：掉帧时（比如刚开机、
+        被大窗口盖住）不会变成慢动作，最多是步子跨大一点（已夹上限）。
+        """
         now = time.monotonic()
-        dt = 1.0 / FPS
+        last = getattr(self, "_last_t", None)
+        if last is None:
+            self._last_t = now
+            last = now
+        dt = now - last
+        self._last_t = now
+        if dt <= 0:
+            dt = 1.0 / FPS
+        dt = min(dt, MAX_DT)        # 长时间卡顿后不要一帧跳穿屏幕
 
         if self._mode == "drag":
             return                        # 位置由拖动事件驱动
@@ -890,11 +914,17 @@ class DesktopPet(tk.Toplevel):
         self._bubble.say("系统联动已" + ("开启" if self._monitor_on else "关闭"),
                          2500)
 
-    def set_speed(self, period, amplitude):
-        """运行时改速度：period 越大越慢，amplitude 是上下各多少像素。"""
+    def set_speed(self, period, amplitude, remember=True):
+        """运行时改浮动速度：period 越大越慢，amplitude 是上下各多少像素。
+
+        remember=True 时写进 config.json，下次召唤墨墨还是这个节奏。
+        """
         global FLOAT_PERIOD, FLOAT_AMPLITUDE
         FLOAT_PERIOD, FLOAT_AMPLITUDE = period, amplitude
         self._start = time.monotonic()
+        if remember:
+            self._cfg_set("pet_float_period", period)
+            self._cfg_set("pet_float_amplitude", amplitude)
 
     def set_full_through(self, enabled):
         self._full_through = enabled

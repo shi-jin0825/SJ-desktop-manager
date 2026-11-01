@@ -20,14 +20,16 @@
 **左侧边栏**
 
 - 顶部用户信息：墨墨头像 + 当前 Windows 用户名 + 已归类数量
-- 导航菜单：🏠 首页 · 🗂 分类管理 · 📊 数据统计 · 📈 系统监控 · ⏳ 专属倒计时 · ⚙ 设置（当前页高亮）
-- 左下角功能键：⇔ 折叠 / 展开侧边栏（状态自动记住）、⏻ 退出
+- 全局搜索框：输入即过滤桌面项与分类，回车打开第一项
+- 导航菜单：首页 · 分类管理 · 数据统计 · 系统监控 · 专属倒计时 · 设置
+  （左侧统一线性图标，当前页高亮）
+- 左下角功能键：折叠 / 展开侧边栏（状态自动记住）、退出
 
 **右侧主内容区**：点击左侧菜单切换对应的页面
 
 | 页面 | 内容 |
 | --- | --- |
-| 🏠 首页 | 手机桌面式网格：真实图标磁贴、分类文件夹 3×3 预览、右键归类 |
+| 🏠 首页 | 手机桌面式网格：真实图标磁贴、分类文件夹 3×3 预览、右键归类、Ctrl/Shift 多选批量移入 |
 | 🗂 分类管理 | 分类卡片：图标预览、内容概览、打开 / 重命名 / 删除、新建分类 |
 | 📊 数据统计 | 概览数字卡片 + 分类分布占比条 + 类型分布（快捷方式 / 文件夹 / 文件） |
 | 📈 系统监控 | 每秒刷新：CPU 占用率（含 60 秒折线图）、内存剩余、实时下载 / 上传网速 |
@@ -88,13 +90,41 @@
 
 ## 运行
 
-双击 `run.bat`（内部用 `pythonw.exe` 启动，**不会弹出命令行黑框**），或：
+双击 `run.bat`（**自动探测**本机的 Python，用 `pythonw.exe` 启动，不会弹出
+命令行黑框），或：
 
 ```bash
 python main.py
 ```
 
 要求 Windows 10+ 与 Python 3.8+。首次运行会在项目根目录生成 `config.json`。
+
+`run.bat` 的探测顺序：`MOMO_PYTHON` / `PYTHONW` 环境变量 → `py -3` 启动器 →
+PATH 里的 `pythonw.exe` / `python.exe` → 常见安装目录
+（`%LOCALAPPDATA%\Programs\Python`、`C:\Python3x`、`D:\Python3x`）→
+仓库自带的 `runtime\pythonw.exe`。都不中时给出安装 / 用 exe 的提示。
+
+### 打包成 exe（给没有 Python 的电脑）
+
+```bash
+pip install pyinstaller          # 仅是构建期工具，运行时依然零第三方依赖
+python tools/build_exe.py        # 产物：dist\墨墨桌面管理助手.exe
+python tools/build_exe.py --dir  # 或打包成目录（启动更快）
+```
+
+这个 exe 单文件、免安装，拷到任何一台 Windows 电脑双击即可运行
+（不需要装 Python，图标与 `assets/` 已一并打进去）。
+
+## 数据安全
+
+`config.json` 存着你所有的分类、归类关系和倒计时，写入方式做了三重保险：
+
+- **原子写入**：先写 `config.json.tmp` 并 `fsync`，再用 `os.replace` 整体替换，
+  断电 / 崩溃不会留下半截文件
+- **自动备份**：每次成功写入前，把上一份好配置留成 `config.json.bak`
+- **损坏可恢复**：主文件读不出来时自动回退 `.bak`，并把损坏原件改名成
+  `config.json.corrupt-<时间戳>` 留给你检查；只有在备份也损坏时才回默认配置，
+  而且会明确提示，不会静默清零
 
 ## 专属图标与快捷方式
 
@@ -117,29 +147,89 @@ python tools/make_shortcut.py   # 在桌面创建/更新快捷方式
 
 ```
 SJ-desktop-manager/
-├── main.py                # 启动入口
-├── run.bat                # 一键启动（pythonw，无黑框）
+├── main.py                # 启动入口（先声明 DPI 感知，再建窗口）
+├── run.bat                # 一键启动（自动探测 Python，pythonw 无黑框）
 ├── core/
-│   ├── scanner.py         # 桌面项扫描（过滤隐藏/系统文件）
-│   ├── config.py          # 分类 / 倒计时 / 设置持久化（config.json）
+│   ├── scanner.py         # 桌面项扫描（过滤隐藏/系统文件，同名不同路径都保留）
+│   ├── config.py          # 分类 / 倒计时 / 设置持久化（原子写 + 备份 + 可恢复）
 │   ├── countdown.py       # 倒数日计算（日期解析、每年循环、剩余天数）
-│   ├── icons.py           # 系统图标提取（Shell COM + 纯标准库 PNG 编码）
-│   └── sysinfo.py         # 系统监控采集（CPU/内存/网速，ctypes 直调 Win32）
+│   ├── icons.py           # 系统图标提取（Shell COM + 纯标准库 PNG 编码 + LRU 缓存）
+│   ├── sysinfo.py         # 系统监控采集（CPU/内存/网速，ctypes 直调 Win32）
+│   ├── hotkey.py          # 全局热键（RegisterHotKey + WM_HOTKEY 过滤轮询）
+│   └── dpi.py             # 高 DPI 感知声明
 ├── gui/
-│   ├── app.py             # 主框架：左侧边栏 + 右侧页面路由
+│   ├── app.py             # 主框架：侧边栏 + 页面路由（页面实例缓存）
 │   ├── pages.py           # 六个页面：首页 / 分类 / 统计 / 监控 / 倒计时 / 设置
-│   ├── widgets.py         # 通用控件工具（居中、圆角、图标缩放、占比条…）
+│   ├── widgets.py         # 通用控件（胶囊渐变按钮、圆角搜索框、图标缩放…）
+│   ├── navicons.py        # 自制统一线性图标（24×24 Canvas 矢量绘制）
 │   ├── theme.py           # 浅色 / 深色主题配色表
-│   └── pet.py             # 桌面悬浮宠物（无边框/透明/穿透/浮动）
+│   └── pet.py             # 桌面悬浮宠物（物理引擎 / 系统联动 / 番茄钟）
 ├── tools/
-│   ├── make_icon.py       # 合成备选 .ico 图标（3×3 应用网格样式）
+│   ├── build_exe.py       # PyInstaller 一键打包成 exe
+│   ├── make_icon.py       # 合成备选 .ico 图标
 │   ├── mascot_to_ico.py   # 吉祥物图 -> 应用 .ico
 │   └── make_shortcut.py   # 创建/更新桌面快捷方式
+├── tests/
+│   └── test_core.py       # core 层单测（倒计时 / 配置，19 个用例）
 ├── assets/                # 图标、吉祥物图与截图
-└── config.json            # 首次运行自动生成
+└── config.json            # 首次运行自动生成（已在 .gitignore 中）
 ```
 
+## 测试
+
+```bash
+python -m unittest discover -s tests -v
+```
+
+覆盖 `core.countdown`（日期解析、闰年循环 2/29→2/28、进度区间）与
+`core.config`（原子写 / 备份 / 损坏恢复 / 路径 key 迁移 / 失效清理 / 批量归类）
+这两块有边界逻辑的纯逻辑模块。
+
+## 许可
+
+MIT，见 [LICENSE](LICENSE)。
+
 ## 更新日志
+
+### v1.3 — 数据安全与工程化（原子写 / 备份 / 分发 / 归类鲁棒性）
+
+**P0 数据安全**
+
+- **原子写入**：`config.json` 改成「写 `config.json.tmp` → `fsync` → `os.replace`
+  整体替换」，断电 / 崩溃不会留下半截文件（详见上方「数据安全」一节）
+- **自动备份 + 可恢复**：每次成功写入前把上一份留成 `config.json.bak`；
+  主文件读不出来时自动回退备份，损坏原件改名为 `config.json.corrupt-<时间戳>`
+  保留待查；只有备份也坏才回默认配置，并明确提示，**不再静默清零**
+- **分发门槛**：`run.bat` 不再硬编码 `D:\Python313`，改成自动探测
+  （环境变量 → `py -3` → PATH → 常见安装目录 → 仓库自带 runtime），
+  找不到时给出安装 / 用 exe 的指引；新增 `tools/build_exe.py` 一键
+  PyInstaller 打包出单文件 exe（13.6 MB，免安装、无需 Python）
+
+**P1 日常体验**
+
+- **归类按路径而非文件名**：`assignments` 的 key 换成规范化绝对路径，
+  文件改名 / 移动后归类不再失效；旧配置（文件名 key）在下次扫描时自动迁移，
+  用户无感；顺带清掉指向已删除文件的死条目
+- **不再被同名遮挡**：用户桌面与公共桌面的同名项目现在都会列出
+  （原来按文件名全局去重，后者被前者顶掉，整理时会漏项）
+- **切页不再重建**：页面实例缓存 + `pack_forget`，侧边栏只重画导航高亮。
+  于是切页不再重扫桌面、不再重建搜索框（输入焦点不丢），
+  系统监控页切走时停掉采样定时器、切回来再启动
+- **高 DPI 感知**：启动前声明 Per-Monitor DPI Awareness（`core/dpi.py`），
+  高缩放屏下图标和渐变按钮不再发虚
+
+**P2 打磨**
+
+- **批量整理**：首页支持 `Ctrl`/`Shift` + 点击多选，选中后工具栏下方出现
+  「移入分类 / 移出分类 / 撤销上一步 / 取消选择」；分类窗口里移出某项后
+  **不再直接关窗**，可以连续整理
+- **桌宠**：物理步进改用真实经过时间（掉帧不再变慢动作，且夹了单帧上限），
+  右键菜单选的浮动节奏会写进 `config.json`，下次召唤还是这个速度
+- **图标**：缓存加上限（LRU，400 条）不再只增不减；首页磁贴图标改为
+  **分批懒加载**（先显示 emoji 占位，再每帧补几个），桌面项很多时首屏不卡
+- **开源卫生**：补上 `LICENSE`（MIT，此前 README 声明 MIT 却没有文件）；
+  新增 `tests/test_core.py` 覆盖 `core.countdown` 与 `core.config`
+  共 19 个用例：`python -m unittest discover -s tests -v`
 
 ### v1.2 — 界面现代化：统一图标 / 全局搜索 / 卡片动效 / 全局热键
 
