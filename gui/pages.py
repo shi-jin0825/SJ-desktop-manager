@@ -19,8 +19,9 @@ from core.undo import UndoStack
 from gui import category_ops
 from gui.theme import (DEFAULT_THEME, THEMES, THEME_NAMES, get_theme, style_menu)
 from gui.fonts import font
+from gui.tokens import BAR_H, BTN_H_SM, FS, SP
 from gui.widgets import (open_target, make_photo, rounded_rect, short_name,
-                         center_window, hline, stat_bar, shrink,
+                         center_window, dialog_header, hline, stat_bar, shrink,
                          ModernButton, hover_card, ScrolledFrame)
 
 # ---- 磁贴尺寸（基准值；网格变宽时整体按倍率放大） ----
@@ -40,7 +41,21 @@ REF_GRID_W = 640        # 基准网格宽度：这个宽度下磁贴正好是基
 TILE_SCALE_POW = 0.75   # 宽度→倍率曲线：1.0=完全线性，越小越偏向「多排几列」
 TILE_GROW = 1.75        # 磁贴最大放大倍率（顶到上限后就只加列、不再变大）
 TILE_SHRINK = 0.72      # 窗口缩到最小时磁贴的最小倍率（再小就看不清图标了）
-TILE_PRESETS = {"small": 84, "normal": 100, "large": 132}   # 手动档位（px）
+# 手动档位：写成基准的倍数（以前 normal=100 比基准 96 还大 4px，是孤值）
+TILE_PRESETS = {"small": int(TILE_SIZE * 0.88),    # 84
+                "normal": TILE_SIZE,               # 96
+                "large": int(TILE_SIZE * 1.38)}    # 132
+
+
+def tile_scale(width: int) -> float:
+    """磁贴放大倍率：宽度比的 0.75 次方，封顶 TILE_GROW。
+
+    首页磁贴和分类窗口卡片共用这一条曲线。以前各算各的（首页 0.75 次方
+    上限 1.75x，分类窗口是线性、上限 1.4x、基准 560），结果两个窗口同时
+    开着时分类卡片反而比首页磁贴还大——明明该是「首页 > 分类」的层级。
+    """
+    s = (max(240.0, float(width)) / REF_GRID_W) ** TILE_SCALE_POW
+    return max(TILE_SHRINK, min(TILE_GROW, s))
 
 # ---- 分类文件夹窗口内的卡片 ----
 CAT_TILE_W = 90         # 卡片基准宽度（px）
@@ -93,11 +108,11 @@ class CategoryWindow(tk.Toplevel):
                       max(400, min(820, int(mh * 0.78) if mh else 400)),
                       master)
 
-        self.head = tk.Label(self, text="", font=font(14, "bold"),
+        self.head = tk.Label(self, text="", font=font(FS["lg"], "bold"),
                              bg=c["dialog_bg"], fg=c["text"])
-        self.head.pack(pady=10)
+        self.head.pack(pady=SP["md"])
         self.frame = tk.Frame(self, bg=c["dialog_bg"])
-        self.frame.pack(fill="both", expand=True, padx=10, pady=5)
+        self.frame.pack(fill="both", expand=True, padx=SP["md"], pady=SP["xs"])
         self.frame.bind("<Configure>", self._on_resize)
         self._render()
 
@@ -118,10 +133,11 @@ class CategoryWindow(tk.Toplevel):
 
     @staticmethod
     def _plan(width):
-        per = CAT_TILE_W + 12
+        """和首页磁贴共用 tile_scale 曲线（见模块顶部说明）。"""
+        tile_w = int(round(CAT_TILE_W * tile_scale(width)))
+        per = tile_w + SP["md"]
         cols = max(CAT_MIN_COLS, min(CAT_MAX_COLS, width // per))
-        s = max(1.0, min(1.4, width / 560.0))
-        return cols, int(CAT_TILE_W * s)
+        return cols, tile_w
 
     def _do_relayout(self):
         self._relayout_job = None
@@ -138,13 +154,15 @@ class CategoryWindow(tk.Toplevel):
         cols = self.cols
         icon_size = max(32, int(round(ICON_SIZE * self.tile_w / float(CAT_TILE_W)
                                       / 2.0)) * 2)
-        fs = max(8, min(12, int(round(9 * self.tile_w / float(CAT_TILE_W)))))
+        fs = max(FS["xs"], min(FS["md"],
+                               int(round(FS["xs"] * self.tile_w
+                                         / float(CAT_TILE_W)))))
         self.frame.grid_columnconfigure(tuple(range(cols)), weight=1)
 
         if not items:
             tk.Label(self.frame, text="空空如也，右键桌面上的项目可移入此分类",
                      bg=c["dialog_bg"], fg=c["text_muted"]).grid(
-                row=0, column=0, columnspan=cols, pady=40)
+                row=0, column=0, columnspan=cols, pady=SP["xxl"])
             return
 
         for idx, item in enumerate(items):
@@ -167,7 +185,7 @@ class CategoryWindow(tk.Toplevel):
                                 bg=c["panel_bg"], fg=c["text"],
                                 activebackground=c["panel_active"],
                                 command=lambda p=item.path: open_target(p))
-            btn.grid(row=idx // cols, column=idx % cols, padx=6, pady=6)
+            btn.grid(row=idx // cols, column=idx % cols, padx=SP["sm"], pady=SP["sm"])
             menu = tk.Menu(btn, tearoff=0)
             menu.add_command(label="打开", command=lambda p=item.path: open_target(p))
             menu.add_command(label="移出分类",
@@ -216,7 +234,27 @@ class BasePage(tk.Frame):
 
     BTN_W = 130         # 按钮估宽：用来算一行能放几个（自动换行用）
 
-    def _scroll_body(self, padx=16, pady=(0, 12), center=False):
+    def _card_buttons(self, parent, actions, side="right"):
+        """卡片里的按钮：和工具栏同一套胶囊按钮语言，只是小一号。
+
+        以前卡片里用的是原生 tk.Button（直角、纯色、9 号字），和工具栏的
+        渐变胶囊并排出现时，同一个界面里像两个不同的 App。
+        actions: [(文字, 命令)] 或 [(文字, 命令, 是否主操作)]
+        """
+        c = self.C
+        row = tk.Frame(parent, bg=c["card_bg"])
+        row.pack(side=side, anchor="n")
+        for item in actions:
+            text, cmd = item[0], item[1]
+            primary = item[2] if len(item) > 2 else False
+            ModernButton(row, text=text, command=cmd, c=c, primary=primary,
+                         height=BTN_H_SM, padx=SP["md"],
+                         font=font(FS["xs"]), icon_size=15,
+                         bg=c["card_bg"]).pack(side="left", padx=SP["xs"])
+        return row
+
+    def _scroll_body(self, padx=SP["lg"], pady=(SP["none"], SP["md"]),
+                     center=False):
         """建一个可滚动的内容区，返回容器（真正的内容往它的 .body 里塞）。
 
         长页面（设置 / 倒计时 / 分类 / 统计 / 监控）内容超过一屏时，
@@ -233,7 +271,7 @@ class BasePage(tk.Frame):
         """
         c = self.C
         host = tk.Frame(self, bg=c["app_bg"])
-        host.pack(fill="x", padx=16, pady=(12, 6))
+        host.pack(fill="x", padx=SP["lg"], pady=(SP["md"], SP["sm"]))
         items = []
         for item in buttons:
             if len(item) == 3:
@@ -270,7 +308,7 @@ class BasePage(tk.Frame):
             for i, (icon, text, cmd, primary) in enumerate(items):
                 ModernButton(grid, text=text, command=cmd, c=self.C,
                              icon=icon, primary=primary).grid(
-                    row=i // n, column=i % n, padx=(0, 10), pady=(0, 6),
+                    row=i // n, column=i % n, padx=(SP["none"], SP["md"]), pady=(SP["none"], SP["sm"]),
                     sticky="w")
 
         grid.bind("<Configure>", relayout)
@@ -322,10 +360,10 @@ class DesktopPage(BasePage):
         ], primary="新建分类")
         # 批量操作条：有选中时才显形（占位框常驻，保证 pack 顺序稳定）
         self.sel_host = tk.Frame(self, bg=c["app_bg"])
-        self.sel_host.pack(fill="x", padx=16, after=self.winfo_children()[0])
+        self.sel_host.pack(fill="x", padx=SP["lg"], after=self.winfo_children()[0])
         self._build_selbar()
         # 内容区：可滚动（和设置 / 统计等长页面共用一套滚动容器）
-        sc = ScrolledFrame(self, c, center=True, padx=16, pady=(0, 12))
+        sc = ScrolledFrame(self, c, center=True, padx=SP["lg"], pady=(SP["none"], SP["md"]))
         sc.pack(fill="both", expand=True)
         self.canvas = sc.canvas
         self.scrollbar = sc.scrollbar
@@ -349,8 +387,8 @@ class DesktopPage(BasePage):
         bar = tk.Frame(self.sel_host, bg=c["app_bg"])
         self.selbar = bar
         self.sel_label = tk.Label(bar, text="", bg=c["app_bg"], fg=c["accent"],
-                                  font=font(10, "bold"))
-        self.sel_label.pack(anchor="w", pady=(0, 4))
+                                  font=font(FS["sm"], "bold"))
+        self.sel_label.pack(anchor="w", pady=(SP["none"], SP["xs"]))
 
         self.sel_menu = tk.Menu(self, tearoff=0)
         style_menu(self.sel_menu, c)
@@ -396,7 +434,7 @@ class DesktopPage(BasePage):
         self.sel_label.config(text=text)
         want = bool(n or undo)
         if want and not shown:
-            self.selbar.pack(fill="x", pady=(0, 6))
+            self.selbar.pack(fill="x", pady=(SP["none"], SP["sm"]))
             self._selbar_shown = True
         elif not want and shown:
             self.selbar.pack_forget()
@@ -548,9 +586,7 @@ class DesktopPage(BasePage):
             # 手动档位：尺寸定死，只按宽度决定排几列
             tile_w = TILE_PRESETS[preset]
         else:
-            s = (avail / float(REF_GRID_W)) ** TILE_SCALE_POW
-            s = max(TILE_SHRINK, min(TILE_GROW, s))
-            tile_w = int(round(TILE_SIZE * s))
+            tile_w = int(round(TILE_SIZE * tile_scale(avail)))
         tile_w = int(min(TILE_SIZE * TILE_GROW,
                          max(TILE_SIZE * TILE_SHRINK, tile_w)))
         cols = max(MIN_COLS, min(MAX_COLS, avail // (tile_w + pad)))
@@ -654,12 +690,12 @@ class DesktopPage(BasePage):
 
         if total == 0 and query:
             box = tk.Frame(self.grid_frame, bg=self.C["app_bg"])
-            box.pack(pady=60)
+            box.pack(pady=SP["xxl"])
             tk.Label(box, text="🔍", bg=self.C["app_bg"], fg=self.C["text"],
-                     font=font(28)).pack()
+                     font=font(FS["hero"])).pack()
             tk.Label(box, text=f"没有找到与「{self.app.query}」匹配的项目",
                      bg=self.C["app_bg"], fg=self.C["sidebar_muted"],
-                     font=font(11)).pack(pady=(6, 0))
+                     font=font(FS["sm"])).pack(pady=(SP["sm"], SP["none"]))
             self._on_grid_configure()
             self.app.update_topbar(f"搜索「{self.app.query}」· 0 个结果")
             return
@@ -748,7 +784,7 @@ class DesktopPage(BasePage):
 
         canvas = tk.Canvas(frame, width=self.preview, height=self.preview,
                            bg=c["folder_bg"], highlightthickness=0)
-        canvas.pack(pady=(6, 0))
+        canvas.pack(pady=(SP["sm"], SP["none"]))
         rounded_rect(canvas, 1, 1, self.preview - 1, self.preview - 1,
                      r=self.preview_r, fill=c["folder_panel"],
                      outline=c["folder_panel_outline"])
@@ -776,13 +812,16 @@ class DesktopPage(BasePage):
         else:
             canvas.create_text(self.preview // 2, self.preview // 2,
                                text="空", fill=c["empty_text"],
-                               font=font(12, "bold"))
+                               # 跟着磁贴缩放（以前写死 12，小窗口下比图标还大）
+                               font=font(max(FS["xs"],
+                                             int(round(self.tile_font * 1.4))),
+                                         "bold"))
 
         label = tk.Label(frame, text=f"{short_name(category)} ({count})",
                          bg=c["folder_bg"], fg=c["text"],
                          font=font(self.tile_font), cursor="hand2",
                          wraplength=self.tile_w - 10, justify="center")
-        label.pack(pady=(4, 0))
+        label.pack(pady=(SP["xs"], SP["none"]))
 
         menu = tk.Menu(frame, tearoff=0)
         menu.add_command(label="打开分类",
@@ -935,17 +974,16 @@ class DesktopPage(BasePage):
         win.resizable(False, False)
         win.grab_set()
 
+        dialog_header(win, c, "管理分类", "分类列表（括号内为项目数）")
         top = tk.Frame(win, bg=c["dialog_bg"])
-        top.pack(fill="both", expand=True, padx=12, pady=(12, 0))
-        tk.Label(top, text="分类列表（括号内为项目数）",
-                 font=font(10), bg=c["dialog_bg"], fg=c["text"],
-                 anchor="w").pack(fill="x")
+        top.pack(fill="both", expand=True, padx=SP["xl"],
+                 pady=(SP["xs"], SP["none"]))
 
         body = tk.Frame(top, bg=c["dialog_bg"])
-        body.pack(fill="both", expand=True, pady=6)
+        body.pack(fill="both", expand=True, pady=SP["sm"])
         scroll = tk.Scrollbar(body)
         scroll.pack(side="right", fill="y")
-        lst = tk.Listbox(body, font=font(10), relief="solid",
+        lst = tk.Listbox(body, font=font(FS["sm"]), relief="solid",
                          bd=1, activestyle="none", height=10,
                          bg=c["panel_bg"], fg=c["text"],
                          selectbackground=c["list_sel"],
@@ -997,14 +1035,14 @@ class DesktopPage(BasePage):
                 self.refresh(rescan=False)
 
         bar = tk.Frame(win, bg=c["dialog_bg"])
-        bar.pack(fill="x", padx=12, pady=8)
+        bar.pack(fill="x", padx=SP["md"], pady=SP["sm"])
         for icon, text, cmd, primary in (
                 ("folder", "新建", do_add, True),
                 ("gear", "重命名", do_rename, False),
                 ("close", "删除", do_delete, False)):
             ModernButton(bar, text=text, command=cmd, c=c, icon=icon,
-                         primary=primary, height=30, padx=13).pack(
-                side="left", padx=4)
+                         primary=primary, height=30, padx=SP["md"]).pack(
+                side="left", padx=SP["xs"])
         ModernButton(bar, text="关闭", command=win.destroy, c=c,
                      height=30).pack(side="right")
 
@@ -1044,7 +1082,7 @@ class CategoriesPage(BasePage):
             tk.Label(self.body, text="还没有分类，点上方工具栏的「📁 新建分类」"
                                      "创建第一个",
                      bg=c["app_bg"], fg=c["text_muted"],
-                     font=font(11)).pack(pady=40)
+                     font=font(FS["sm"])).pack(pady=SP["xxl"])
             self.app.update_topbar("暂无分类")
             return
 
@@ -1057,13 +1095,13 @@ class CategoriesPage(BasePage):
         c = self.C
         inner = [i for i in self.items if i.category == category]
         card = tk.Frame(self.body, bg=c["card_bg"], highlightthickness=1,
-                        highlightbackground=c["divider"], padx=12, pady=10)
-        card.pack(fill="x", pady=6)
+                        highlightbackground=c["divider"], padx=SP["md"], pady=SP["md"])
+        card.pack(fill="x", pady=SP["sm"])
 
         # 左侧：2×2 图标预览
         pv = tk.Canvas(card, width=48, height=48, bg=c["card_bg"],
                        highlightthickness=0)
-        pv.pack(side="left", padx=(0, 12))
+        pv.pack(side="left", padx=(SP["none"], SP["md"]))
         rounded_rect(pv, 1, 1, 47, 47, r=10, fill=c["folder_panel"],
                      outline=c["divider"])
         for i, item in enumerate(inner[:4]):
@@ -1076,23 +1114,24 @@ class CategoriesPage(BasePage):
         mid = tk.Frame(card, bg=c["card_bg"])
         mid.pack(side="left", fill="both", expand=True)
         tk.Label(mid, text=f"📁 {category}", bg=c["card_bg"], fg=c["text"],
-                 font=font(12, "bold"), anchor="w").pack(fill="x")
+                 font=font(FS["md"], "bold"), anchor="w").pack(fill="x")
         names = "、".join(short_name(i.display_name, 10) for i in inner[:6])
         if len(inner) > 6:
             names += f" 等 {len(inner)} 项"
-        tk.Label(mid, text=names if names else "（空分类）",
-                 bg=c["card_bg"], fg=c["sidebar_muted"],
-                 font=font(9), anchor="w").pack(fill="x")
+        names_lab = tk.Label(mid, text=names if names else "（空分类）",
+                             bg=c["card_bg"], fg=c["sidebar_muted"],
+                             font=font(FS["xs"]), anchor="w", wraplength=200,
+                             justify="left")
+        names_lab.pack(fill="x")
+        # 项目名太长会把右侧按钮挤出卡片：让名字随卡片宽度折行
+        names_lab.bind("<Configure>", lambda e, l=names_lab:
+                       l.configure(wraplength=max(80, e.width - SP["lg"])))
 
-        btns = tk.Frame(card, bg=c["card_bg"])
-        btns.pack(side="right")
-        for text, cmd in (("打开", lambda: self._open(category)),
-                          ("重命名", lambda: self._rename(category)),
-                          ("删除", lambda: self._delete(category))):
-            tk.Button(btns, text=text, font=font(9),
-                      relief="flat", bg=c["panel_bg"], fg=c["text"],
-                      activebackground=c["panel_active"], bd=0,
-                      padx=10, pady=3, command=cmd).pack(side="left", padx=3)
+        self._card_buttons(card, (
+            ("打开", lambda: self._open(category), True),
+            ("重命名", lambda: self._rename(category)),
+            ("删除", lambda: self._delete(category)),
+        ))
 
     def _open(self, category):
         items = [i for i in self.items if i.category == category]
@@ -1144,12 +1183,12 @@ class StatsPage(BasePage):
                 ((total, "桌面项目"), (done, "已归类"),
                  (total - done, "未归类"), (len(self.cfg.categories), "分类数"))):
             card = tk.Frame(grid, bg=c["card_bg"], highlightthickness=1,
-                            highlightbackground=c["divider"], padx=14, pady=12)
-            card.grid(row=0, column=idx, padx=6, pady=6, sticky="nsew")
+                            highlightbackground=c["divider"], padx=SP["lg"], pady=SP["md"])
+            card.grid(row=0, column=idx, padx=SP["sm"], pady=SP["sm"], sticky="nsew")
             tk.Label(card, text=str(num), bg=c["card_bg"], fg=c["accent"],
-                     font=font(20, "bold")).pack()
+                     font=font(FS["xl"], "bold")).pack()
             tk.Label(card, text=label, bg=c["card_bg"], fg=c["sidebar_muted"],
-                     font=font(9)).pack()
+                     font=font(FS["xs"])).pack()
 
         # 分类分布
         self._section("分类分布")
@@ -1175,21 +1214,20 @@ class StatsPage(BasePage):
     def _section(self, text):
         c = self.C
         tk.Label(self.body, text=text, bg=c["app_bg"], fg=c["text"],
-                 font=font(11, "bold"), anchor="w").pack(
-            fill="x", pady=(14, 4))
-        hline(self.body, c["divider"], pady=(0, 8))
+                 font=font(FS["sm"], "bold"), anchor="w").pack(
+            fill="x", pady=(SP["lg"], SP["xs"]))
+        hline(self.body, c["divider"], pady=(SP["none"], SP["sm"]))
 
     def _row(self, name, n, total):
         c = self.C
         row = tk.Frame(self.body, bg=c["app_bg"])
-        row.pack(fill="x", pady=3)
+        row.pack(fill="x", pady=SP["xs"])
         tk.Label(row, text=name, bg=c["app_bg"], fg=c["text"],
-                 font=font(10), width=12, anchor="w").pack(side="left")
-        stat_bar(row, (n / total) if total else 0, c, width=260,
-                 height=10, stretch=True)
+                 font=font(FS["sm"]), width=12, anchor="w").pack(side="left")
+        stat_bar(row, (n / total) if total else 0, c, width=260, stretch=True)
         pct = f"{n / total * 100:.0f}%" if total else "0%"
         tk.Label(row, text=f"{n} 项 · {pct}", bg=c["app_bg"], fg=c["sidebar_muted"],
-                 font=font(9)).pack(side="left", padx=10)
+                 font=font(FS["xs"])).pack(side="left", padx=SP["md"])
 
 
 # ======================================================================
@@ -1201,7 +1239,8 @@ class SystemPage(BasePage):
     subtitle = "CPU 占用率、内存剩余与实时网速"
     INTERVAL = 1000        # 刷新间隔（毫秒）
     HISTORY = 60           # 折线图保留的采样点数
-    GRAPH_H = 130          # 折线图高度
+    GRAPH_H = 130          # 折线图最小高度
+    GRAPH_MAX_H = 300      # 折线图最高长到这个高度（窗口再高也不继续拉）
     METER_W = 210          # 卡片内进度条宽度
 
     def _build(self):
@@ -1212,7 +1251,7 @@ class SystemPage(BasePage):
         bar = self._toolbar([("refresh", "立即刷新", self._tick)])
         tk.Label(bar, text="每 1 秒自动刷新 · 数据来自 Windows 系统接口",
                  bg=c["app_bg"], fg=c["sidebar_muted"],
-                 font=font(9)).pack(side="left")
+                 font=font(FS["xs"])).pack(side="left")
 
         body = self._scroll_body().body
 
@@ -1224,17 +1263,33 @@ class SystemPage(BasePage):
         self._mem_val, self._mem_meter, self._mem_sub = self._card(grid, 1, "内存剩余")
         self._net_val, self._net_meter, self._net_sub = self._card(grid, 2, "实时网速")
 
+        hline(body, c["divider"], pady=(SP["md"], SP["xs"]))
         tk.Label(body, text=f"CPU 使用率（最近 {self.HISTORY} 秒）",
                  bg=c["app_bg"], fg=c["text"],
-                 font=font(11, "bold"), anchor="w").pack(
-            fill="x", pady=(14, 4))
+                 font=font(FS["sm"], "bold"), anchor="w").pack(
+            fill="x", pady=(SP["sm"], SP["xs"]))
         self.graph = tk.Canvas(body, height=self.GRAPH_H, bg=c["card_bg"],
                                highlightthickness=1,
                                highlightbackground=c["divider"])
         self.graph.pack(fill="x")
+        # 图表高度跟着窗口：以前钉死 130px，窗口拉高后上方卡片拉开了、图还是一条
+        self.bind("<Configure>", self._on_page_resize)
 
         sysinfo.prime()                       # 建立采样基准
         self._draw_graph()                    # 先画空网格
+
+    def _on_page_resize(self, event=None):
+        """窗口拉高时把折线图也拉高（上下限封顶，别一头沉）。"""
+        if getattr(self, "graph", None) is None:
+            return
+        h = self.winfo_height()
+        if h <= 1:
+            return
+        want = max(self.GRAPH_H, min(self.GRAPH_MAX_H, int(h * 0.30)))
+        if abs(want - self.graph.winfo_height()) < 4:
+            return
+        self.graph.configure(height=want)
+        self._draw_graph()
 
     def on_show(self):
         """切回本页时重启采样（切走时已停掉，不在后台空转）。"""
@@ -1260,18 +1315,18 @@ class SystemPage(BasePage):
         """一张指标卡：标题 + 大数值 + 进度条 + 补充说明。"""
         c = self.C
         card = tk.Frame(parent, bg=c["card_bg"], highlightthickness=1,
-                        highlightbackground=c["divider"], padx=14, pady=12)
-        card.grid(row=0, column=col, padx=6, pady=6, sticky="nsew")
+                        highlightbackground=c["divider"], padx=SP["lg"], pady=SP["md"])
+        card.grid(row=0, column=col, padx=SP["sm"], pady=SP["sm"], sticky="nsew")
         tk.Label(card, text=title, bg=c["card_bg"], fg=c["sidebar_muted"],
-                 font=font(9), anchor="w").pack(fill="x")
+                 font=font(FS["xs"]), anchor="w").pack(fill="x")
         val = tk.Label(card, text="—", bg=c["card_bg"], fg=c["accent"],
-                       font=font(20, "bold"), anchor="w")
-        val.pack(fill="x", pady=(4, 2))
-        meter = tk.Canvas(card, height=10, bg=c["stat_bar_bg"],
+                       font=font(FS["xl"], "bold"), anchor="w")
+        val.pack(fill="x", pady=(SP["xs"], SP["xs"]))
+        meter = tk.Canvas(card, height=BAR_H, bg=c["stat_bar_bg"],
                           highlightthickness=0, bd=0)
-        meter.pack(fill="x", pady=4)          # 随卡片变宽，不再钉死 210px
+        meter.pack(fill="x", pady=SP["xs"])          # 随卡片变宽，不再钉死 210px
         sub = tk.Label(card, text="", bg=c["card_bg"], fg=c["sidebar_muted"],
-                       font=font(9), anchor="w")
+                       font=font(FS["xs"]), anchor="w")
         sub.pack(fill="x")
         return val, meter, sub
 
@@ -1334,7 +1389,7 @@ class SystemPage(BasePage):
         c = self.C
         cv = self.graph
         w = max(240, cv.winfo_width())
-        h = self.GRAPH_H
+        h = max(self.GRAPH_H, cv.winfo_height())
         cv.configure(width=w)
         cv.delete("all")
         y0, y1 = 12, h - 12          # 留上下边距
@@ -1344,7 +1399,7 @@ class SystemPage(BasePage):
             y = y1 - span * pct / 100.0
             cv.create_line(40, y, w - 8, y, fill=c["divider"])
             cv.create_text(34, y, text=f"{pct}%", anchor="e",
-                           fill=c["sidebar_muted"], font=font(7))
+                           fill=c["sidebar_muted"], font=font(FS["xs"]))
         hist = self._history
         if len(hist) >= 2:
             step = (w - 48) / float(self.HISTORY - 1)
@@ -1360,10 +1415,10 @@ class SystemPage(BasePage):
                            pts[-1][0] + 3, pts[-1][1] + 3,
                            fill=c["stat_bar"], outline="")
             cv.create_text(w - 8, 12, text=f"当前 {hist[-1]:.0f}%", anchor="ne",
-                           fill=c["text"], font=font(9, "bold"))
+                           fill=c["text"], font=font(FS["xs"], "bold"))
         else:
             cv.create_text(w // 2, h // 2, text="采集中…", fill=c["sidebar_muted"],
-                           font=font(10))
+                           font=font(FS["sm"]))
 
     def destroy(self):
         """页面销毁时停掉定时任务，避免回调打到已销毁的控件。"""
@@ -1397,11 +1452,11 @@ class CountdownDialog(tk.Toplevel):
         self.transient(master)
         self.grab_set()
 
-        tk.Label(self, text=self.title(), font=font(13, "bold"),
-                 bg=c["dialog_bg"], fg=c["text"]).pack(pady=(14, 12))
+        dialog_header(self, c, self.title(),
+                      "设定一个重要的日子，墨墨会一直帮你数着")
 
         form = tk.Frame(self, bg=c["dialog_bg"])
-        form.pack(fill="x", padx=20)
+        form.pack(fill="x", padx=SP["xl"])
 
         self.var_title = tk.StringVar(value=self.item.get("title", ""))
         self.var_date = tk.StringVar(
@@ -1415,23 +1470,19 @@ class CountdownDialog(tk.Toplevel):
 
         tk.Checkbutton(self, text="每年循环（生日 / 纪念日）",
                        variable=self.var_repeat,
-                       font=font(9),
+                       font=font(FS["xs"]),
                        bg=c["dialog_bg"], fg=c["text"],
                        selectcolor=c["panel_bg"],
                        activebackground=c["dialog_bg"],
                        activeforeground=c["text"],
-                       highlightthickness=0, bd=0).pack(anchor="w", padx=20, pady=(8, 0))
+                       highlightthickness=0, bd=0).pack(anchor="w", padx=SP["xl"], pady=(SP["sm"], SP["none"]))
 
         btns = tk.Frame(self, bg=c["dialog_bg"])
-        btns.pack(pady=16)
-        tk.Button(btns, text="保存", width=10, font=font(10),
-                  relief="flat", bg=c["accent"], fg=c["accent_fg"],
-                  activebackground=c["accent"], bd=0, padx=8, pady=4,
-                  command=self._save).pack(side="left", padx=6)
-        tk.Button(btns, text="取消", width=10, font=font(10),
-                  relief="flat", bg=c["panel_bg"], fg=c["text"],
-                  activebackground=c["panel_active"], bd=0, padx=8, pady=4,
-                  command=self.destroy).pack(side="left", padx=6)
+        btns.pack(pady=SP["lg"])
+        ModernButton(btns, text="保存", command=self._save, c=c, primary=True,
+                     bg=c["dialog_bg"]).pack(side="left", padx=SP["sm"])
+        ModernButton(btns, text="取消", command=self.destroy, c=c,
+                     bg=c["dialog_bg"]).pack(side="left", padx=SP["sm"])
 
         self.bind("<Return>", lambda e: self._save())
         self.bind("<Escape>", lambda e: self.destroy())
@@ -1440,14 +1491,14 @@ class CountdownDialog(tk.Toplevel):
         c = self.C
         tk.Label(parent, text=label, width=5, anchor="w",
                  bg=c["dialog_bg"], fg=c["sidebar_muted"],
-                 font=font(10)).grid(row=row, column=0, pady=6)
+                 font=font(FS["sm"])).grid(row=row, column=0, pady=SP["sm"])
         tk.Entry(parent, textvariable=var, width=28,
-                 font=font(10), relief="flat",
+                 font=font(FS["sm"]), relief="flat",
                  bg=c["panel_bg"], fg=c["text"],
                  insertbackground=c["text"],
                  highlightthickness=1,
                  highlightbackground=c["divider"]).grid(
-            row=row, column=1, sticky="ew", pady=6, padx=(8, 0))
+            row=row, column=1, sticky="ew", pady=SP["sm"], padx=(SP["sm"], SP["none"]))
         parent.grid_columnconfigure(1, weight=1)
 
     def _date_row(self, parent, row):
@@ -1455,15 +1506,15 @@ class CountdownDialog(tk.Toplevel):
         c = self.C
         tk.Label(parent, text="日期", width=5, anchor="w",
                  bg=c["dialog_bg"], fg=c["sidebar_muted"],
-                 font=font(10)).grid(row=row, column=0, pady=6)
+                 font=font(FS["sm"])).grid(row=row, column=0, pady=SP["sm"])
         cell = tk.Frame(parent, bg=c["dialog_bg"])
-        cell.grid(row=row, column=1, sticky="ew", pady=6, padx=(8, 0))
+        cell.grid(row=row, column=1, sticky="ew", pady=SP["sm"], padx=(SP["sm"], SP["none"]))
 
         today = cd.today()
         cur = cd.parse_date(self.item.get("date")) or today
         lo_year = min(1970, cur.year)
 
-        kw = dict(font=font(11), width=5, justify="center",
+        kw = dict(font=font(FS["sm"]), width=5, justify="center",
                   relief="flat", bd=0, bg=c["panel_bg"], fg=c["text"],
                   buttonbackground=c["panel_bg"],
                   insertbackground=c["text"],
@@ -1486,23 +1537,23 @@ class CountdownDialog(tk.Toplevel):
 
         self.spin_y.pack(side="left")
         tk.Label(cell, text="年", bg=c["dialog_bg"], fg=c["sidebar_muted"],
-                 font=font(9)).pack(side="left", padx=(3, 8))
+                 font=font(FS["xs"])).pack(side="left", padx=(SP["xs"], SP["sm"]))
         self.spin_m.pack(side="left")
         tk.Label(cell, text="月", bg=c["dialog_bg"], fg=c["sidebar_muted"],
-                 font=font(9)).pack(side="left", padx=(3, 8))
+                 font=font(FS["xs"])).pack(side="left", padx=(SP["xs"], SP["sm"]))
         self.spin_d.pack(side="left")
         tk.Label(cell, text="日", bg=c["dialog_bg"], fg=c["sidebar_muted"],
-                 font=font(9)).pack(side="left", padx=(3, 8))
+                 font=font(FS["xs"])).pack(side="left", padx=(SP["xs"], SP["sm"]))
 
-        tk.Button(cell, text="今天", font=font(9),
+        tk.Button(cell, text="今天", font=font(FS["xs"]),
                   relief="flat", bg=c["panel_bg"], fg=c["sidebar_muted"],
-                  activebackground=c["panel_active"], bd=0, padx=8, pady=3,
+                  activebackground=c["panel_active"], bd=0, padx=SP["sm"], pady=SP["xs"],
                   command=self._set_today).pack(side="left")
 
         self._week_label = tk.Label(parent, text="", bg=c["dialog_bg"],
                                     fg=c["sidebar_muted"],
-                                    font=font(9))
-        self._week_label.grid(row=row + 1, column=1, sticky="w", padx=(8, 0))
+                                    font=font(FS["xs"]))
+        self._week_label.grid(row=row + 1, column=1, sticky="w", padx=(SP["sm"], SP["none"]))
         self._sync_date()
 
     def _set_today(self):
@@ -1584,18 +1635,14 @@ class PomodoroDialog(tk.Toplevel):
         self.configure(bg=c["dialog_bg"])
         self.resizable(False, False)
 
-        tk.Label(self, text="🍅 自定义番茄钟",
-                 font=font(14, "bold"),
-                 bg=c["dialog_bg"], fg=c["text"]).pack(pady=(14, 4))
-        tk.Label(self, text="选好时长后墨墨会捧着书陪你，头顶显示剩余时间",
-                 font=font(9),
-                 bg=c["dialog_bg"], fg=c["sidebar_muted"]).pack()
+        dialog_header(self, c, "🍅 自定义番茄钟",
+                      "选好时长后墨墨会捧着书陪你，头顶显示剩余时间")
 
         grid = tk.Frame(self, bg=c["dialog_bg"])
-        grid.pack(fill="x", padx=24, pady=(14, 6))
+        grid.pack(fill="x", padx=SP["xl"], pady=(SP["lg"], SP["sm"]))
         grid.grid_columnconfigure(1, weight=1)
 
-        kw = dict(font=font(11), width=5, justify="center",
+        kw = dict(font=font(FS["sm"]), width=5, justify="center",
                   relief="flat", bd=0, bg=c["panel_bg"], fg=c["text"],
                   buttonbackground=c["panel_bg"],
                   insertbackground=c["text"],
@@ -1605,62 +1652,58 @@ class PomodoroDialog(tk.Toplevel):
 
         tk.Label(grid, text="专注", anchor="w", bg=c["dialog_bg"],
                  fg=c["sidebar_muted"],
-                 font=font(10)).grid(row=0, column=0, pady=6)
+                 font=font(FS["sm"])).grid(row=0, column=0, pady=SP["sm"])
         self.spin_focus = tk.Spinbox(grid, from_=app.POMO_MIN, to=app.POMO_MAX,
                                      **kw)
         self.spin_focus.delete(0, "end")
         self.spin_focus.insert(0, str(app.pomo_minutes))
-        self.spin_focus.grid(row=0, column=1, sticky="w", padx=(8, 0))
+        self.spin_focus.grid(row=0, column=1, sticky="w", padx=(SP["sm"], SP["none"]))
         tk.Label(grid, text="分钟", bg=c["dialog_bg"], fg=c["text"],
-                 font=font(10)).grid(row=0, column=2,
-                                                    sticky="w", padx=6)
+                 font=font(FS["sm"])).grid(row=0, column=2,
+                                                    sticky="w", padx=SP["sm"])
 
         tk.Label(grid, text="休息", anchor="w", bg=c["dialog_bg"],
                  fg=c["sidebar_muted"],
-                 font=font(10)).grid(row=1, column=0, pady=6)
+                 font=font(FS["sm"])).grid(row=1, column=0, pady=SP["sm"])
         self.spin_break = tk.Spinbox(grid, from_=app.POMO_MIN, to=app.POMO_MAX,
                                      **kw)
         self.spin_break.delete(0, "end")
         self.spin_break.insert(0, str(app.pomo_break))
-        self.spin_break.grid(row=1, column=1, sticky="w", padx=(8, 0))
+        self.spin_break.grid(row=1, column=1, sticky="w", padx=(SP["sm"], SP["none"]))
         tk.Label(grid, text="分钟", bg=c["dialog_bg"], fg=c["text"],
-                 font=font(10)).grid(row=1, column=2,
-                                                    sticky="w", padx=6)
+                 font=font(FS["sm"])).grid(row=1, column=2,
+                                                    sticky="w", padx=SP["sm"])
 
         preset = tk.Frame(self, bg=c["dialog_bg"])
-        preset.pack(fill="x", padx=24, pady=(4, 6))
+        preset.pack(fill="x", padx=SP["xl"], pady=(SP["xs"], SP["sm"]))
         tk.Label(preset, text="常用：", bg=c["dialog_bg"],
                  fg=c["sidebar_muted"],
-                 font=font(9)).pack(side="left")
+                 font=font(FS["xs"])).pack(side="left")
         for m in POMO_PRESETS:
-            tk.Button(preset, text=f"{m} 分钟", font=font(9),
+            tk.Button(preset, text=f"{m} 分钟", font=font(FS["xs"]),
                       relief="flat", bg=c["panel_bg"], fg=c["text"],
                       activebackground=c["panel_active"], bd=0,
-                      padx=8, pady=3,
+                      padx=SP["sm"], pady=SP["xs"],
                       command=lambda mm=m: self._set_focus(mm)).pack(
-                side="left", padx=3)
+                side="left", padx=SP["xs"])
 
         self.var_remember = tk.BooleanVar(value=True)
         tk.Checkbutton(self, text="记住为默认时长（下次直接开始）",
                        variable=self.var_remember,
-                       font=font(9),
+                       font=font(FS["xs"]),
                        bg=c["dialog_bg"], fg=c["text"],
                        selectcolor=c["panel_bg"],
                        activebackground=c["dialog_bg"],
                        activeforeground=c["text"],
-                       highlightthickness=0, bd=0).pack(anchor="w", padx=24,
-                                                        pady=(4, 2))
+                       highlightthickness=0, bd=0).pack(anchor="w", padx=SP["xl"],
+                                                        pady=(SP["xs"], SP["xs"]))
 
         btns = tk.Frame(self, bg=c["dialog_bg"])
-        btns.pack(pady=(10, 14))
-        tk.Button(btns, text="开始专注", font=font(10, "bold"),
-                  relief="flat", bg=c["accent"], fg=c["accent_fg"],
-                  activebackground=c["accent"], bd=0, padx=18, pady=5,
-                  command=self._ok).pack(side="left", padx=6)
-        tk.Button(btns, text="取消", font=font(10),
-                  relief="flat", bg=c["panel_bg"], fg=c["text"],
-                  activebackground=c["panel_active"], bd=0, padx=18, pady=5,
-                  command=self.destroy).pack(side="left", padx=6)
+        btns.pack(pady=(SP["md"], SP["lg"]))
+        ModernButton(btns, text="开始专注", command=self._ok, c=c, primary=True,
+                     bg=c["dialog_bg"]).pack(side="left", padx=SP["sm"])
+        ModernButton(btns, text="取消", command=self.destroy, c=c,
+                     bg=c["dialog_bg"]).pack(side="left", padx=SP["sm"])
 
         self.spin_focus.focus_set()
         self.bind("<Return>", lambda e: self._ok())
@@ -1712,31 +1755,27 @@ class HotkeyDialog(tk.Toplevel):
         self.configure(bg=c["dialog_bg"])
         self.resizable(False, False)
 
-        tk.Label(self, text="⌨ 自定义全局热键",
-                 font=font(14, "bold"),
-                 bg=c["dialog_bg"], fg=c["text"]).pack(pady=(14, 4))
-        tk.Label(self, text="直接按下你想要的组合键（例如 Ctrl+Alt+M）",
-                 font=font(9),
-                 bg=c["dialog_bg"], fg=c["sidebar_muted"]).pack()
+        dialog_header(self, c, "⌨ 自定义全局热键",
+                      "直接按下你想要的组合键（例如 Ctrl+Alt+M）")
 
         self.var = tk.StringVar(value=hotkey.combo_text(self.mod, self.vk))
         tk.Label(self, textvariable=self.var,
                  font=("Consolas", 18, "bold"),
                  bg=c["panel_bg"], fg=c["accent"], width=18,
-                 pady=8).pack(pady=14)
+                 pady=SP["sm"]).pack(pady=SP["lg"])
         self.hint = tk.Label(self, text="等待按键…", bg=c["dialog_bg"],
                              fg=c["sidebar_muted"],
-                             font=font(9))
+                             font=font(FS["xs"]))
         self.hint.pack()
 
         btns = tk.Frame(self, bg=c["dialog_bg"])
-        btns.pack(pady=(10, 12))
+        btns.pack(pady=(SP["md"], SP["md"]))
         ModernButton(btns, text="保存", command=self._save, c=c,
-                     primary=True).pack(side="left", padx=6)
+                     primary=True).pack(side="left", padx=SP["sm"])
         ModernButton(btns, text="清除", command=self._clear,
-                     c=c).pack(side="left", padx=6)
+                     c=c).pack(side="left", padx=SP["sm"])
         ModernButton(btns, text="取消", command=self.destroy,
-                     c=c).pack(side="left", padx=6)
+                     c=c).pack(side="left", padx=SP["sm"])
 
         self.bind("<KeyPress>", self._on_key)
         self.focus_set()
@@ -1844,15 +1883,15 @@ class CountdownPage(BasePage):
 
         if not items:
             box = tk.Frame(self.body, bg=c["app_bg"])
-            box.pack(pady=60)
+            box.pack(pady=SP["xxl"])
             tk.Label(box, text="⏳", bg=c["app_bg"], fg=c["text"],
-                     font=font(34)).pack()
+                     font=font(FS["hero"])).pack()
             tk.Label(box, text="还没有倒计时", bg=c["app_bg"], fg=c["text"],
-                     font=font(13, "bold")).pack(pady=(6, 4))
-            tk.Label(box, text="点「➕ 新建倒计时」记下第一个重要的日子\n"
+                     font=font(FS["md"], "bold")).pack(pady=(SP["sm"], SP["xs"]))
+            tk.Label(box, text="点上方工具栏的「新建倒计时」记下第一个重要的日子\n"
                               "（考试、生日、发工资、假期…）",
                      bg=c["app_bg"], fg=c["sidebar_muted"],
-                     font=font(9), justify="center").pack()
+                     font=font(FS["xs"]), justify="center").pack()
             self.app.update_topbar("暂无倒计时")
             return
 
@@ -1874,24 +1913,24 @@ class CountdownPage(BasePage):
         c = self.C
         info = cd.describe(item)
         card = tk.Frame(self.body, bg=c["card_bg"], highlightthickness=2,
-                        highlightbackground=c["accent"], padx=18, pady=16)
-        card.pack(fill="x", pady=(6, 12))
+                        highlightbackground=c["accent"], padx=SP["lg"], pady=SP["lg"])
+        card.pack(fill="x", pady=(SP["sm"], SP["md"]))
 
         left = tk.Frame(card, bg=c["card_bg"])
         left.pack(side="left", fill="both", expand=True)
 
         num_color = c["accent"] if info["state"] != "past" else c["sidebar_muted"]
         tk.Label(left, text=self._big_number(info), bg=c["card_bg"],
-                 fg=num_color, font=font(30, "bold"),
+                 fg=num_color, font=font(FS["hero"], "bold"),
                  anchor="w").pack(anchor="w")
         tk.Label(left, text=item.get("title", ""), bg=c["card_bg"], fg=c["text"],
-                 font=font(14, "bold"), anchor="w").pack(anchor="w")
+                 font=font(FS["lg"], "bold"), anchor="w").pack(anchor="w")
         tk.Label(left, text=self._date_text(item, info), bg=c["card_bg"],
-                 fg=c["sidebar_muted"], font=font(10),
-                 anchor="w").pack(anchor="w", pady=(2, 0))
+                 fg=c["sidebar_muted"], font=font(FS["sm"]),
+                 anchor="w").pack(anchor="w", pady=(SP["xs"], SP["none"]))
         if item.get("note"):
             tk.Label(left, text=item["note"], bg=c["card_bg"],
-                     fg=c["sidebar_muted"], font=font(9),
+                     fg=c["sidebar_muted"], font=font(FS["xs"]),
                      anchor="w").pack(anchor="w")
         self._progress_row(left, item)
         self._actions(card, item, card)
@@ -1900,28 +1939,36 @@ class CountdownPage(BasePage):
         c = self.C
         info = cd.describe(item)
         card = tk.Frame(self.body, bg=c["card_bg"], highlightthickness=1,
-                        highlightbackground=c["divider"], padx=14, pady=12)
-        card.pack(fill="x", pady=6)
+                        highlightbackground=c["divider"], padx=SP["lg"], pady=SP["md"])
+        card.pack(fill="x", pady=SP["sm"])
 
         num_color = c["accent"] if info["state"] != "past" else c["sidebar_muted"]
         left = tk.Frame(card, bg=c["card_bg"], width=118)
         left.pack(side="left", fill="y")
         left.pack_propagate(False)
         tk.Label(left, text=self._big_number(info), bg=c["card_bg"],
-                 fg=num_color, font=font(22, "bold"),
+                 fg=num_color, font=font(FS["xl"], "bold"),
                  anchor="center").pack(fill="x")
 
         mid = tk.Frame(card, bg=c["card_bg"])
         mid.pack(side="left", fill="both", expand=True)
-        tk.Label(mid, text=item.get("title", ""), bg=c["card_bg"], fg=c["text"],
-                 font=font(12, "bold"), anchor="w").pack(fill="x")
+        title_lab = tk.Label(mid, text=item.get("title", ""), bg=c["card_bg"],
+                             fg=c["text"], font=font(FS["md"], "bold"),
+                             anchor="w")
+        title_lab.pack(fill="x")
         tk.Label(mid, text=self._date_text(item, info), bg=c["card_bg"],
-                 fg=c["sidebar_muted"], font=font(9),
+                 fg=c["sidebar_muted"], font=font(FS["xs"]),
                  anchor="w").pack(fill="x")
         if item.get("note"):
-            tk.Label(mid, text=item["note"], bg=c["card_bg"],
-                     fg=c["sidebar_muted"], font=font(9),
-                     anchor="w").pack(fill="x")
+            note_lab = tk.Label(mid, text=item["note"], bg=c["card_bg"],
+                                fg=c["sidebar_muted"], font=font(FS["xs"]),
+                                anchor="w", wraplength=200, justify="left")
+            note_lab.pack(fill="x")
+            # 备注写长了会把右侧按钮挤出卡片：随卡片宽度折行
+            note_lab.bind("<Configure>", lambda e, l=note_lab:
+                          l.configure(wraplength=max(80, e.width - SP["sm"])))
+        title_lab.bind("<Configure>", lambda e, l=title_lab:
+                       l.configure(wraplength=max(80, e.width - SP["sm"])))
         self._progress_row(mid, item)
         self._actions(card, item, card)
 
@@ -1932,16 +1979,10 @@ class CountdownPage(BasePage):
         """
         c = self.C
         cid = item.get("id")
-        btns = tk.Frame(parent, bg=c["card_bg"])
-        btns.pack(side="right", anchor="n")
         # 注意：必须用默认参数锁住 cid，否则 lambda 捕获循环变量会删错条目
         acts = (("编辑", lambda cid=cid: self._edit(cid)),
-                ("删除", lambda cid=cid: self._delete(cid)))
-        for text, cmd in acts:
-            tk.Button(btns, text=text, font=font(9),
-                      relief="flat", bg=c["panel_bg"], fg=c["text"],
-                      activebackground=c["panel_active"], bd=0,
-                      padx=10, pady=3, command=cmd).pack(side="left", padx=3)
+                ("删除", lambda cid=cid: self._delete(cid), True))
+        self._card_buttons(parent, acts)
 
         if card is None:
             return
@@ -1982,11 +2023,11 @@ class CountdownPage(BasePage):
             return
         c = self.C
         row = tk.Frame(parent, bg=c["card_bg"])
-        row.pack(fill="x", pady=(6, 0))
-        stat_bar(row, ratio, c, width=260, height=8, stretch=True)
+        row.pack(fill="x", pady=(SP["sm"], SP["none"]))
+        stat_bar(row, ratio, c, width=260, stretch=True)
         tk.Label(row, text=f"{ratio * 100:.0f}%", bg=c["card_bg"],
-                 fg=c["sidebar_muted"], font=font(8)).pack(
-            side="left", padx=8)
+                 fg=c["sidebar_muted"], font=font(FS["xs"])).pack(
+            side="left", padx=SP["sm"])
 
     # ---- 增删改 ----
     def _add(self):
@@ -2028,51 +2069,51 @@ class SettingsPage(BasePage):
 
     def _build(self):
         c = self.C
-        self.body = self._scroll_body(pady=12).body
+        self.body = self._scroll_body(pady=SP["md"]).body
 
         self._section("外观主题")
         self.var = tk.StringVar(value=self.app.theme_name)
         for key in ("light", "dark"):
             tk.Radiobutton(self.body, text=THEME_NAMES[key], value=key,
-                           variable=self.var, font=font(10),
+                           variable=self.var, font=font(FS["sm"]),
                            bg=c["app_bg"], fg=c["text"],
                            selectcolor=c["panel_bg"],
                            activebackground=c["app_bg"],
                            activeforeground=c["text"],
                            highlightthickness=0, bd=0,
-                           command=self._pick_theme).pack(anchor="w", pady=2)
+                           command=self._pick_theme).pack(anchor="w", pady=SP["xs"])
         chips = tk.Frame(self.body, bg=c["app_bg"])
-        chips.pack(anchor="w", pady=8)
+        chips.pack(anchor="w", pady=SP["sm"])
         for name, key in (("背景", "app_bg"), ("磁贴", "panel_bg"),
                           ("卡片", "card_bg"), ("强调", "accent")):
-            tk.Label(chips, text=name, width=6, font=font(8),
-                     bg=c[key], fg=c["text"], padx=4, pady=6).pack(side="left", padx=3)
+            tk.Label(chips, text=name, width=6, font=font(FS["xs"]),
+                     bg=c[key], fg=c["text"], padx=SP["xs"], pady=SP["sm"]).pack(side="left", padx=SP["xs"])
 
         self._section("首页磁贴尺寸")
         tile_row = tk.Frame(self.body, bg=c["app_bg"])
-        tile_row.pack(anchor="w", pady=4)
+        tile_row.pack(anchor="w", pady=SP["xs"])
         self._tile_var = tk.StringVar(
             value=str(self.cfg.get_setting("tile_size", "auto") or "auto"))
         for val, text in (("auto", "随窗口自适应"), ("small", "小"),
                           ("normal", "标准"), ("large", "大")):
             tk.Radiobutton(tile_row, text=text, value=val,
-                           variable=self._tile_var, font=font(10),
+                           variable=self._tile_var, font=font(FS["sm"]),
                            bg=c["app_bg"], fg=c["text"],
                            selectcolor=c["panel_bg"],
                            activebackground=c["app_bg"],
                            activeforeground=c["text"],
                            highlightthickness=0, bd=0,
                            command=self._pick_tile_size).pack(
-                side="left", padx=(0, 12))
+                side="left", padx=(SP["none"], SP["md"]))
         tk.Label(self.body, text="自适应：窗口拉大时磁贴跟着变大（图标、"
                                  "文件夹预览、文字一同比放大）；"
                                  "也可以固定成小 / 标准 / 大。",
                  bg=c["app_bg"], fg=c["sidebar_muted"],
-                 font=font(9)).pack(anchor="w")
+                 font=font(FS["xs"])).pack(anchor="w")
 
         self._section("桌面宠物")
         pet_row = tk.Frame(self.body, bg=c["app_bg"])
-        pet_row.pack(anchor="w", pady=4)
+        pet_row.pack(anchor="w", pady=SP["xs"])
         pet_text = "收起宠物" if self.app.pet_active() else "召唤宠物"
         self._pet_btn = ModernButton(
             pet_row, text=pet_text, command=lambda: self._pet(self._pet_btn),
@@ -2081,13 +2122,13 @@ class SettingsPage(BasePage):
         tk.Label(pet_row, text="墨墨会悬浮在桌面上：可拖拽抛掷（重力弹跳）、"
                                "点击摸头会开心",
                  bg=c["app_bg"], fg=c["sidebar_muted"],
-                 font=font(9)).pack(side="left", padx=10)
+                 font=font(FS["xs"])).pack(side="left", padx=SP["md"])
 
         pomo_row = tk.Frame(self.body, bg=c["app_bg"])
-        pomo_row.pack(anchor="w", pady=4)
+        pomo_row.pack(anchor="w", pady=SP["xs"])
         running = bool(self.app.pomodoro)
         pomo_text = "结束番茄钟" if running else "开始番茄钟"
-        spin_kw = dict(font=font(10), width=4, justify="center",
+        spin_kw = dict(font=font(FS["sm"]), width=4, justify="center",
                        relief="flat", bd=0, bg=c["panel_bg"], fg=c["text"],
                        buttonbackground=c["panel_bg"],
                        insertbackground=c["text"],
@@ -2101,7 +2142,7 @@ class SettingsPage(BasePage):
                                         textvariable=self.var_pomo, **spin_kw)
             self.spin_pomo.pack(side="left")
             tk.Label(pomo_row, text="分钟", bg=c["app_bg"], fg=c["text"],
-                     font=font(9)).pack(side="left", padx=(3, 8))
+                     font=font(FS["xs"])).pack(side="left", padx=(SP["xs"], SP["sm"]))
         ModernButton(pomo_row, text=pomo_text, command=self._toggle_pomodoro,
                      c=c, icon="clock", primary=not running).pack(side="left")
         self.var_pomo_break = tk.IntVar(value=self.app.pomo_break)
@@ -2109,25 +2150,25 @@ class SettingsPage(BasePage):
             self.spin_pomo_break = tk.Spinbox(
                 pomo_row, from_=self.app.POMO_MIN, to=self.app.POMO_MAX,
                 textvariable=self.var_pomo_break, **spin_kw)
-            self.spin_pomo_break.pack(side="left", padx=(12, 0))
+            self.spin_pomo_break.pack(side="left", padx=(SP["md"], SP["none"]))
             tk.Label(pomo_row, text="分钟休息", bg=c["app_bg"],
-                     fg=c["text"], font=font(9)).pack(
-                side="left", padx=(3, 4))
+                     fg=c["text"], font=font(FS["xs"])).pack(
+                side="left", padx=(SP["xs"], SP["xs"]))
         tk.Label(pomo_row,
                  text=("专注结束后墨墨会收起倒计时、提醒你休息"
                        if running else
                        "自定义专注时长：开启后墨墨捧书陪你，头顶倒计时"),
                  bg=c["app_bg"], fg=c["sidebar_muted"],
-                 font=font(9)).pack(side="left", padx=10)
+                 font=font(FS["xs"])).pack(side="left", padx=SP["md"])
 
         monitor_row = tk.Frame(self.body, bg=c["app_bg"])
-        monitor_row.pack(anchor="w", pady=4)
+        monitor_row.pack(anchor="w", pady=SP["xs"])
         self._monitor_var = tk.BooleanVar(
             value=bool(self.app.cfg.get_setting("pet_monitor", True)))
         tk.Checkbutton(monitor_row, text="系统状态联动（CPU 高冒汗 / "
                                          "内存不足疲惫 / 网速快奔跑）",
                        variable=self._monitor_var, command=self._toggle_monitor,
-                       font=font(9),
+                       font=font(FS["xs"]),
                        bg=c["app_bg"], fg=c["text"],
                        selectcolor=c["panel_bg"],
                        activebackground=c["app_bg"],
@@ -2136,12 +2177,12 @@ class SettingsPage(BasePage):
 
         self._section("全局热键")
         hk_top = tk.Frame(self.body, bg=c["app_bg"])
-        hk_top.pack(anchor="w", pady=4)
+        hk_top.pack(anchor="w", pady=SP["xs"])
         self._hk_var = tk.BooleanVar(
             value=bool(self.app.cfg.get_setting("hotkey_enabled", True)))
         tk.Checkbutton(hk_top, text="启用全局热键（窗口隐藏时也能一键呼出）",
                        variable=self._hk_var, command=self._toggle_hotkey,
-                       font=font(9),
+                       font=font(FS["xs"]),
                        bg=c["app_bg"], fg=c["text"],
                        selectcolor=c["panel_bg"],
                        activebackground=c["app_bg"],
@@ -2149,15 +2190,15 @@ class SettingsPage(BasePage):
                        highlightthickness=0, bd=0).pack(side="left")
 
         hk_row = tk.Frame(self.body, bg=c["app_bg"])
-        hk_row.pack(anchor="w", pady=4)
+        hk_row.pack(anchor="w", pady=SP["xs"])
         tk.Label(hk_row, text="当前：", bg=c["app_bg"], fg=c["sidebar_muted"],
-                 font=font(9)).pack(side="left")
+                 font=font(FS["xs"])).pack(side="left")
         tk.Label(hk_row, text=self.app.hotkey_text(), bg=c["app_bg"],
-                 fg=c["accent"], font=font(10, "bold")).pack(
-            side="left", padx=(0, 10))
+                 fg=c["accent"], font=font(FS["sm"], "bold")).pack(
+            side="left", padx=(SP["none"], SP["md"]))
         ModernButton(hk_row, text="修改快捷键", command=self._pick_hotkey,
                      c=c, icon="gear", primary=True).pack(side="left",
-                                                          padx=(0, 8))
+                                                          padx=(SP["none"], SP["sm"]))
         ModernButton(hk_row, text="恢复默认", command=self._reset_hotkey,
                      c=c, icon="refresh").pack(side="left")
 
@@ -2169,24 +2210,24 @@ class SettingsPage(BasePage):
         elif not self._hk_var.get():
             state = "已关闭：只能通过任务栏图标打开主界面"
         tk.Label(self.body, text=state, bg=c["app_bg"], fg=c["sidebar_muted"],
-                 font=font(9), anchor="w",
-                 justify="left").pack(fill="x", pady=(2, 0))
+                 font=font(FS["xs"]), anchor="w",
+                 justify="left").pack(fill="x", pady=(SP["xs"], SP["none"]))
 
         self._section("侧边栏")
         sb_row = tk.Frame(self.body, bg=c["app_bg"])
-        sb_row.pack(anchor="w", pady=4)
+        sb_row.pack(anchor="w", pady=SP["xs"])
         ModernButton(sb_row, text="折叠 / 展开", command=self.app.toggle_sidebar,
                      c=c, icon="collapse").pack(side="left")
         tk.Label(sb_row, text="折叠后只显示图标，状态会自动记住",
                  bg=c["app_bg"], fg=c["sidebar_muted"],
-                 font=font(9)).pack(side="left", padx=10)
+                 font=font(FS["xs"])).pack(side="left", padx=SP["md"])
 
         self._section("关于")
         tk.Label(self.body,
                  text=f"墨墨桌面管理助手 {APP_VERSION}\n"
                       "纯 Python 标准库实现（tkinter），无需任何第三方依赖。",
                  bg=c["app_bg"], fg=c["sidebar_muted"],
-                 font=font(9), justify="left",
+                 font=font(FS["xs"]), justify="left",
                  anchor="w").pack(anchor="w")
 
         self.app.update_topbar(f"当前主题：{THEME_NAMES[self.app.theme_name]}")
@@ -2194,9 +2235,9 @@ class SettingsPage(BasePage):
     def _section(self, text):
         c = self.C
         tk.Label(self.body, text=text, bg=c["app_bg"], fg=c["text"],
-                 font=font(11, "bold"), anchor="w").pack(
-            fill="x", pady=(14, 4))
-        hline(self.body, c["divider"], pady=(0, 8))
+                 font=font(FS["sm"], "bold"), anchor="w").pack(
+            fill="x", pady=(SP["lg"], SP["xs"]))
+        hline(self.body, c["divider"], pady=(SP["none"], SP["sm"]))
 
     def _toggle_pomodoro(self):
         if self.app.pomodoro:

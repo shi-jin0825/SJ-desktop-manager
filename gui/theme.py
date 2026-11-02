@@ -80,7 +80,9 @@ THEMES = {
         "accent_2_hover": "#b184fa",
         "divider": "#2e343f",
         "card_bg": "#262b34",
-        "topbar_bg": "#1c1f26",
+        # 深色下标题条原本和 app_bg 完全同色，跟浅色（标题条比底色浅一档）
+        # 不对称，标题条边界全靠那条分隔线撑着；这里抬一档。
+        "topbar_bg": "#232833",
         "stat_bar": "#6d8bff",
         "stat_bar_bg": "#2f3542",
         "shadow": "#101319",

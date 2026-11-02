@@ -15,6 +15,7 @@ from tkinter import messagebox
 
 from gui.navicons import ICONS, IconLabel, draw_icon
 from gui import fonts
+from gui.tokens import BAR_H, FS, SP
 
 
 # ---- 颜色小工具（渐变按钮用）----
@@ -150,9 +151,13 @@ class ModernButton(tk.Canvas):
     ICON_GAP = 7
 
     def __init__(self, master, text="", command=None, c=None, primary=False,
-                 icon=None, height=34, padx=16, font=None, icon_size=17):
+                 icon=None, height=34, padx=SP["lg"], font=None, icon_size=17,
+                 bg=None):
         c = dict(c or {})
         self.c = c
+        # 胶囊边缘抗锯齿要往「所在底色」上混：放在卡片里就得用 card_bg，
+        # 一律按 app_bg 混的话，卡片上会看到一圈淡淡的错色描边。
+        self.bg = bg or c.get("app_bg", "#eeeeee")
         self.primary = primary
         self.text = text
         self.command = command
@@ -171,8 +176,8 @@ class ModernButton(tk.Canvas):
         self.W = int(padx * 2 + icon_w + tw)
         self.H = int(height)
         super().__init__(master, width=self.W, height=self.H,
-                         bg=c.get("app_bg", "#eeeeee"),
-                         highlightthickness=0, bd=0, cursor="hand2")
+                         bg=self.bg, highlightthickness=0, bd=0,
+                         cursor="hand2")
         self._paint()
         self.bind("<Enter>", lambda e: self._set_hover(True))
         self.bind("<Leave>", lambda e: (self._set_hover(False),
@@ -244,7 +249,7 @@ class ModernButton(tk.Canvas):
         w, h = int(self.W), int(self.H)
         top, bot, fg, border = self._colors()
         if not self._enabled:
-            fade = self.c.get("app_bg", "#eeeeee")
+            fade = self.bg
             top = bot = mix(top, fade, 0.55)
             border = mix(border, fade, 0.55)
             fg = mix(fg, fade, 0.55)
@@ -286,7 +291,7 @@ class ModernButton(tk.Canvas):
         """
         r = min(h, w) / 2.0
         cy = h / 2.0
-        bg = hex_rgb(self.c.get("app_bg", "#ffffff"))
+        bg = hex_rgb(self.bg)
         t0, t1 = hex_rgb(top), hex_rgb(bot)
         bd = hex_rgb(border)
         bw = self.BORDER
@@ -365,7 +370,7 @@ class RoundedEntry(tk.Canvas):
                               bg=bg, fg=c.get("text", "#333333"),
                               insertbackground=c.get("text", "#333333"),
                               highlightthickness=0,
-                              font=fonts.font(10),
+                              font=fonts.font(FS["xs"]),
                               selectbackground=c.get("accent", "#4b6bfb"),
                               selectforeground=c.get("accent_fg", "#ffffff"))
         self.ic = IconLabel(self, icon, 16, c.get("nav_icon", "#5a6478"), bg=bg)
@@ -460,6 +465,23 @@ def hover_card(tile, children, c, base_bg, hover_bg, grow=6, shadow=None,
     return enter, leave
 
 
+def dialog_header(parent, c: dict, title: str, subtitle=None):
+    """弹窗标题区：主标题 + 可选副标题，四个弹窗共用一套规格。
+
+    早先 CountdownDialog 是 13 号无副标题、番茄钟/热键是 14 号带副标题、
+    管理分类只有 10 号一行——四个弹窗三套标题，看着像三个 App。
+    """
+    box = tk.Frame(parent, bg=c["dialog_bg"])
+    box.pack(fill="x", padx=SP["xl"], pady=(SP["lg"], SP["xs"]))
+    tk.Label(box, text=title, font=fonts.font(FS["lg"], "bold"),
+             bg=c["dialog_bg"], fg=c["text"], anchor="w").pack(fill="x")
+    if subtitle:
+        tk.Label(box, text=subtitle, font=fonts.font(FS["xs"]),
+                 bg=c["dialog_bg"], fg=c["sidebar_muted"],
+                 anchor="w").pack(fill="x")
+    return box
+
+
 class ScrolledFrame(tk.Frame):
     """可纵向滚动的内容区：Canvas + 主题滚动条 + 鼠标滚轮。
 
@@ -472,7 +494,7 @@ class ScrolledFrame(tk.Frame):
 
     SB_W = 14
 
-    def __init__(self, master, c: dict, center=False, padx=0, pady=0):
+    def __init__(self, master, c: dict, center=False, padx=SP["none"], pady=SP["none"]):
         super().__init__(master, bg=c.get("app_bg", "#ffffff"))
         self.C = dict(c or {})
         self.center = center
@@ -571,14 +593,14 @@ class ScrolledFrame(tk.Frame):
         super().destroy()
 
 
-def hline(parent, color, padx=0, pady=6):
+def hline(parent, color, padx=SP["none"], pady=SP["sm"]):
     """一条水平分隔线。"""
     f = tk.Frame(parent, bg=color, height=1)
     f.pack(fill="x", padx=padx, pady=pady)
     return f
 
 
-def stat_bar(parent, ratio, c: dict, width=220, height=10, side="left",
+def stat_bar(parent, ratio, c: dict, width=220, height=BAR_H, side="left",
              stretch=False):
     """统计占比条：底槽 + 按 ratio 填充的彩色条（自动 pack 到 parent）。
 
@@ -586,7 +608,7 @@ def stat_bar(parent, ratio, c: dict, width=220, height=10, side="left",
     （固定宽度的话，大窗口上会缩在左边一小段，显得内容没跟着放大）。
     """
     wrap = tk.Frame(parent, bg=c["stat_bar_bg"], width=width, height=height)
-    wrap.pack(side=side, padx=4, fill="x" if stretch else "",
+    wrap.pack(side=side, padx=SP["xs"], fill="x" if stretch else "",
               expand=bool(stretch))
     wrap.pack_propagate(False)
     cv = tk.Canvas(wrap, width=width, height=height, bg=c["stat_bar_bg"],

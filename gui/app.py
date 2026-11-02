@@ -20,6 +20,7 @@ from core.icons import icon_png  # noqa: F401（保持与旧引用兼容）
 from core import hotkey
 from gui.theme import DEFAULT_THEME, THEMES, THEME_NAMES, get_theme
 from gui.fonts import font
+from gui.tokens import BTN_H, FS, NAV_H, NAV_ICON, SP
 from gui.pages import PAGE_BY_KEY, DesktopPage
 from gui.navicons import IconLabel
 from gui.widgets import (center_window, load_image_file, hline, ModernButton,
@@ -132,7 +133,7 @@ class App(tk.Tk):
             sub.pack_forget()
         else:
             try:
-                sub.pack(side="left", padx=4)
+                sub.pack(side="left", padx=SP["xs"])
             except tk.TclError:
                 pass
 
@@ -278,13 +279,13 @@ class App(tk.Tk):
         topbar.pack_propagate(False)
         self.page_title = tk.Label(topbar, text="", bg=self.C["topbar_bg"],
                                    fg=self.C["text"],
-                                   font=font(14, "bold"))
-        self.page_title.pack(side="left", padx=20)
+                                   font=font(FS["lg"], "bold"))
+        self.page_title.pack(side="left", padx=SP["xl"])
         self.page_sub = tk.Label(topbar, text="", bg=self.C["topbar_bg"],
                                  fg=self.C["sidebar_muted"],
-                                 font=font(9))
-        self.page_sub.pack(side="left", padx=4)
-        hline(self.main, self.C["divider"], pady=0)
+                                 font=font(FS["xs"]))
+        self.page_sub.pack(side="left", padx=SP["xs"])
+        hline(self.main, self.C["divider"], pady=SP["none"])
 
         self.content = tk.Frame(self.main, bg=self.C["app_bg"])
         self.content.pack(fill="both", expand=True)
@@ -303,7 +304,7 @@ class App(tk.Tk):
 
         self._build_user_block()
         self._build_search()
-        hline(self.sidebar, c["divider"], padx=12, pady=(8, 6))
+        hline(self.sidebar, c["divider"], padx=SP["md"], pady=(SP["sm"], SP["sm"]))
         self._nav_buttons()
         self._build_footer()
 
@@ -311,7 +312,7 @@ class App(tk.Tk):
         """顶部用户信息：墨墨头像 + 当前用户名。"""
         c = self.C
         box = tk.Frame(self.sidebar, bg=c["sidebar_bg"])
-        box.pack(fill="x", padx=10, pady=(14, 6))
+        box.pack(fill="x", padx=SP["md"], pady=(SP["lg"], SP["sm"]))
         avatar = load_image_file(os.path.join(ASSETS, "momo-open.png"),
                                  44, self._photos)
         if avatar is not None:
@@ -319,15 +320,15 @@ class App(tk.Tk):
                 anchor="w" if not self.collapsed else "center")
         else:
             tk.Label(box, text="🐙", bg=c["sidebar_bg"],
-                     font=font(22)).pack()
+                     font=font(FS["xl"])).pack()
         if not self.collapsed:
             user = os.environ.get("USERNAME") or os.environ.get("USER") or "本机用户"
             tk.Label(box, text=user, bg=c["sidebar_bg"], fg=c["text"],
-                     font=font(11, "bold"), anchor="w").pack(
-                fill="x", pady=(6, 0))
+                     font=font(FS["sm"], "bold"), anchor="w").pack(
+                fill="x", pady=(SP["sm"], SP["none"]))
             done = len(self.config_mgr.data.get("assignments", {}))
             tk.Label(box, text=f"已归类 {done} 项", bg=c["sidebar_bg"],
-                     fg=c["sidebar_muted"], font=font(8),
+                     fg=c["sidebar_muted"], font=font(FS["xs"]),
                      anchor="w").pack(fill="x")
 
     # ---------------- 全局搜索 ----------------
@@ -335,14 +336,15 @@ class App(tk.Tk):
         """导航上方的全局搜索框：输入即过滤首页桌面项 / 分类。"""
         c = self.C
         box = tk.Frame(self.sidebar, bg=c["sidebar_bg"])
-        box.pack(fill="x", padx=10, pady=(8, 0))
+        box.pack(fill="x", padx=SP["md"], pady=(SP["sm"], SP["none"]))
 
         if self.collapsed:
             # 折叠态只放一个放大镜，点它会自动展开侧边栏并聚焦
-            btn = tk.Frame(box, bg=c["search_bg"], height=34, cursor="hand2")
+            btn = tk.Frame(box, bg=c["search_bg"], height=BTN_H, cursor="hand2")
             btn.pack(fill="x")
             btn.pack_propagate(False)
-            IconLabel(btn, "search", 17, c["nav_icon"], bg=c["search_bg"]).pack(
+            IconLabel(btn, "search", NAV_ICON, c["nav_icon"],
+                          bg=c["search_bg"]).pack(
                 expand=True)
             for w in (btn,):
                 w.bind("<Button-1>", lambda e: self._expand_search())
@@ -351,7 +353,7 @@ class App(tk.Tk):
 
         self.search_var = tk.StringVar(value=self.query)
         entry = RoundedEntry(
-            box, c, textvariable=self.search_var, height=34,
+            box, c, textvariable=self.search_var, height=BTN_H,
             on_clear=lambda: self._set_query(""),
             on_return=lambda e: self._open_first_result(),
             on_escape=lambda e: self._set_query(""))
@@ -402,7 +404,7 @@ class App(tk.Tk):
         """中部导航菜单（单独一个容器，切页时只重建这里）。"""
         c = self.C
         self._nav_frame = tk.Frame(self.sidebar, bg=c["sidebar_bg"])
-        self._nav_frame.pack(fill="x", pady=4)
+        self._nav_frame.pack(fill="x", pady=SP["xs"])
         self._render_nav_items()
 
     def _render_nav_items(self):
@@ -421,22 +423,22 @@ class App(tk.Tk):
         icon_fg = c["accent"] if active else c["nav_icon"]
 
         item = tk.Frame(parent, bg=bg, cursor="hand2")
-        item.pack(fill="x", padx=8, pady=2)
-        inner = tk.Frame(item, bg=bg, height=38)
+        item.pack(fill="x", padx=SP["sm"], pady=SP["xs"])
+        inner = tk.Frame(item, bg=bg, height=NAV_H)
         inner.pack(fill="x")
         inner.pack_propagate(False)
 
         if active and not self.collapsed:
             tk.Frame(inner, bg=c["accent"], width=3).pack(
-                side="left", fill="y", padx=(0, 7))
-        ic = IconLabel(inner, icon, 19, icon_fg, bg=bg)
+                side="left", fill="y", padx=(SP["none"], SP["sm"]))
+        ic = IconLabel(inner, icon, NAV_ICON, icon_fg, bg=bg)
         if self.collapsed:
             ic.place(relx=0.5, rely=0.5, anchor="center")
             targets = [item, inner, ic]
         else:
-            ic.pack(side="left", padx=(11, 10))
+            ic.pack(side="left", padx=(SP["md"], SP["md"]))
             lab = tk.Label(inner, text=label, bg=bg, fg=fg, anchor="w",
-                           font=font(11, "bold" if active else "normal"))
+                           font=font(FS["sm"], "bold" if active else "normal"))
             lab.pack(side="left", fill="x")
             targets = [item, inner, ic, lab]
 
@@ -469,26 +471,27 @@ class App(tk.Tk):
         """左下角功能键：折叠侧边栏 / 退出（同样是统一线性图标）。"""
         c = self.C
         foot = tk.Frame(self.sidebar, bg=c["sidebar_bg"])
-        foot.pack(side="bottom", fill="x", pady=8)
-        hline(foot, c["divider"], padx=12, pady=(0, 6))
+        foot.pack(side="bottom", fill="x", pady=SP["sm"])
+        hline(foot, c["divider"], padx=SP["md"], pady=(SP["none"], SP["sm"]))
         for icon, label, cmd in (
                 ("collapse", "折叠侧边栏" if not self.collapsed else "展开侧边栏",
                  self.toggle_sidebar),
                 ("power", "退出", self._quit)):
             item = tk.Frame(foot, bg=c["sidebar_bg"], cursor="hand2")
-            item.pack(fill="x", padx=8, pady=2)
-            inner = tk.Frame(item, bg=c["sidebar_bg"], height=34)
+            item.pack(fill="x", padx=SP["sm"], pady=SP["xs"])
+            inner = tk.Frame(item, bg=c["sidebar_bg"], height=NAV_H)
             inner.pack(fill="x")
             inner.pack_propagate(False)
-            ic = IconLabel(inner, icon, 17, c["nav_icon"], bg=c["sidebar_bg"])
+            ic = IconLabel(inner, icon, NAV_ICON, c["nav_icon"],
+                            bg=c["sidebar_bg"])
             if self.collapsed:
                 ic.place(relx=0.5, rely=0.5, anchor="center")
                 targets = [item, inner, ic]
             else:
-                ic.pack(side="left", padx=(12, 10))
+                ic.pack(side="left", padx=(SP["md"], SP["md"]))
                 lab = tk.Label(inner, text=label, bg=c["sidebar_bg"],
                                fg=c["sidebar_muted"], anchor="w",
-                               font=font(10))
+                               font=font(FS["sm"]))
                 lab.pack(side="left", fill="x")
                 targets = [item, inner, ic, lab]
             enter, leave = self._hover_group(targets, c["sidebar_bg"],

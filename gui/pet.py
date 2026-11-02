@@ -31,7 +31,9 @@ from ctypes import wintypes
 
 import tkinter as tk
 
+from core import dpi
 from gui.fonts import font
+from gui.tokens import FS
 
 # ==========================================================================
 #  可调参数
@@ -380,7 +382,7 @@ class Bubble(tk.Toplevel):
         c = self._c
         self._cv.delete("all")
         probe = self._cv.create_text(0, 0, text=text, anchor="nw",
-                                     font=font(9), fill=c["text"])
+                                     font=font(FS["xs"]), fill=c["text"])
         bx0, by0, bx1, by1 = self._cv.bbox(probe)
         self._cv.delete(probe)
         tw, th = bx1 - bx0, by1 - by0
@@ -393,7 +395,7 @@ class Bubble(tk.Toplevel):
         self._round_rect(self._cv, x0, y0, x1, y1, 10,
                          fill=c["bubble_bg"], outline=c["bubble_outline"])
         self._cv.create_text((x0 + x1) / 2, (y0 + y1) / 2, text=text,
-                             font=font(9), fill=c["text"],
+                             font=font(FS["xs"]), fill=c["text"],
                              justify="center")
         cx = self._pet._win_w // 2 + 10          # 尾巴对准章鱼头顶
         self._cv.create_polygon(cx - 7, y1 - 1, cx + 7, y1 - 1, cx, y1 + self.TAIL,
@@ -439,6 +441,9 @@ class DesktopPet(tk.Toplevel):
     def __init__(self, master, image_path=None, full_through=False):
         super().__init__(master)
         self._master = master
+        # 按屏幕 DPI 放大：150% 缩放屏上 PET_SIZE 还是 100 物理像素会显得
+        # 比界面小一圈（v1.7 以前就是这个情况）
+        self._size = int(PET_SIZE * max(1.0, min(2.0, dpi.scale_factor())))
 
         # ---- 1) 无边框 + 透明背景 ----
         self.overrideredirect(True)
@@ -450,22 +455,22 @@ class DesktopPet(tk.Toplevel):
         base = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                             "assets")
         self._faces = {}
-        idle = load_pet(self, image_path or default_image_path(), PET_SIZE) \
-            or load_pet_fallback(self, PET_SIZE)
+        idle = load_pet(self, image_path or default_image_path(), self._size) \
+            or load_pet_fallback(self, self._size)
         if idle is None:
             idle = self._fallback_photo()
         self._faces["idle"] = idle
         for key, name in FACE_FILES.items():
             if key == "idle":
                 continue
-            photo = load_pet(self, os.path.join(base, name), PET_SIZE)
+            photo = load_pet(self, os.path.join(base, name), self._size)
             if photo is not None:
                 self._faces[key] = photo
         self._face = "idle"
 
         # ---- 3) 窗口与布局（图片底部居中，方便 Q 弹压缩）----
-        self._win_w = int(PET_SIZE * WIN_SCALE)
-        self._win_h = int(PET_SIZE * WIN_SCALE)
+        self._win_w = int(self._size * WIN_SCALE)
+        self._win_h = int(self._size * WIN_SCALE)
         self._label = tk.Label(self, image=idle, bg=KEY_COLOR,
                                bd=0, highlightthickness=0, cursor="hand2")
         self._label.place(relx=0.5, rely=1.0, anchor="s")
@@ -1019,7 +1024,7 @@ class DesktopPet(tk.Toplevel):
 
     # ---------- 兜底章鱼 ----------
     def _fallback_photo(self):
-        size = PET_SIZE
+        size = self._size
         pm = tk.PhotoImage(master=self, width=size, height=size)
         rows = []
         cx, cy = size / 2.0, size * 0.42
