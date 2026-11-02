@@ -29,6 +29,9 @@ APP_TITLE = "墨墨桌面管理助手"
 SIDEBAR_W = 208      # 展开宽度
 SIDEBAR_W_MINI = 64  # 折叠后宽度
 WIN_W, WIN_H = 1120, 700
+MIN_W, MIN_H = 560, 420        # 能缩到的最小尺寸（和普通软件一样可以缩得很小）
+AUTO_COLLAPSE_W = 780          # 窄到这个宽度就自动收起侧边栏，把宽度让给内容
+NARROW_W = 700                 # 再窄就藏起标题条里的副标题
 
 ASSETS = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                       "assets")
@@ -77,9 +80,10 @@ class App(tk.Tk):
 
         self.configure(bg=self.C["app_bg"])
         self._set_icon()
-        self.minsize(900, 560)
+        self.minsize(MIN_W, MIN_H)
         if not self._restore_geometry():
-            center_window(self, WIN_W, WIN_H)
+            self._fit_to_screen()
+        self.bind("<Configure>", self._on_window_resize)
 
         self._build_shell()
         self._show_page("home")
@@ -89,6 +93,48 @@ class App(tk.Tk):
         self.bind_all("<MouseWheel>", self._on_wheel)
         self.protocol("WM_DELETE_WINDOW", self._quit)
         self._init_hotkey()
+
+    def _fit_to_screen(self):
+        """初始大小不超过屏幕的 90% —— 小屏笔记本上别一启动就顶满屏。"""
+        sw, sh = self.winfo_screenwidth(), self.winfo_screenheight()
+        center_window(self,
+                      max(MIN_W, min(WIN_W, int(sw * 0.9))),
+                      max(MIN_H, min(WIN_H, int(sh * 0.88))))
+
+    def _on_window_resize(self, event=None):
+        """窗口被拉窄到一定程度时自动收起侧边栏，把宽度让给内容区。
+
+        只在「这次折叠是自动的」时才自动展开，不覆盖用户手动折叠的意图；
+        自动折叠也不写进配置，下次启动仍是用户自己选的状态。
+        """
+        if event is not None and event.widget is not self:
+            return
+        w = self.winfo_width()
+        if w <= 1:
+            return
+        if w >= AUTO_COLLAPSE_W:
+            self._search_expanded = False
+        if (w < AUTO_COLLAPSE_W and not self.collapsed
+                and not getattr(self, "_search_expanded", False)):
+            self._auto_collapsed = True
+            self.toggle_sidebar(persist=False)
+        elif w >= AUTO_COLLAPSE_W and getattr(self, "_auto_collapsed", False):
+            self._auto_collapsed = False
+            self.toggle_sidebar(persist=False)
+        self._update_topbar_density()
+
+    def _update_topbar_density(self):
+        """很窄的窗口里藏起副标题，保住主标题不被挤出标题条。"""
+        sub = getattr(self, "page_sub", None)
+        if sub is None:
+            return
+        if self.winfo_width() < NARROW_W:
+            sub.pack_forget()
+        else:
+            try:
+                sub.pack(side="left", padx=4)
+            except tk.TclError:
+                pass
 
     def _restore_geometry(self):
         """恢复上次退出时的窗口大小和位置。
@@ -312,6 +358,8 @@ class App(tk.Tk):
 
     def _expand_search(self):
         if self.collapsed:
+            # 用户主动展开：标记一下，免得「窗口还窄」的自动折叠立刻把它收回去
+            self._search_expanded = True
             self.toggle_sidebar()
         entry = getattr(self, "search_entry", None)
         if entry is not None:
@@ -522,16 +570,23 @@ class App(tk.Tk):
         """页面把自己的状态写回顶部标题条（如项目数量）。"""
         if getattr(self, "page_sub", None) is not None:
             self.page_sub.config(text=text)
+            self._update_topbar_density()
 
     def refresh_current_page(self):
         page = getattr(self, "current_page", None)
         if page is not None and hasattr(page, "refresh"):
             page.refresh()
 
-    def toggle_sidebar(self):
-        """折叠 / 展开侧边栏（状态写入 config.json）。"""
+    def toggle_sidebar(self, persist=True):
+        """折叠 / 展开侧边栏。
+
+        persist=False 用于「窗口太窄自动收起」这种临时动作——不写进配置，
+        免得用户只是缩了一下窗口，下次启动侧边栏就一直是折叠的。
+        """
         self.collapsed = not self.collapsed
-        self.config_mgr.set_setting("sidebar_collapsed", self.collapsed)
+        if persist:
+            self.config_mgr.set_setting("sidebar_collapsed", self.collapsed)
+            self._auto_collapsed = False
         self.sidebar.destroy()
         self._build_sidebar()
 

@@ -39,7 +39,7 @@ TILE_HOVER = 6      # 鼠标悬停时磁贴放大的像素数
 REF_GRID_W = 640        # 基准网格宽度：这个宽度下磁贴正好是基准尺寸
 TILE_SCALE_POW = 0.75   # 宽度→倍率曲线：1.0=完全线性，越小越偏向「多排几列」
 TILE_GROW = 1.75        # 磁贴最大放大倍率（顶到上限后就只加列、不再变大）
-TILE_SHRINK = 0.85      # 窗口很窄时磁贴的最小倍率
+TILE_SHRINK = 0.72      # 窗口缩到最小时磁贴的最小倍率（再小就看不清图标了）
 TILE_PRESETS = {"small": 84, "normal": 100, "large": 132}   # 手动档位（px）
 
 # ---- 分类文件夹窗口内的卡片 ----
@@ -214,24 +214,57 @@ class BasePage(tk.Frame):
     def on_hide(self):
         pass
 
+    BTN_W = 130         # 按钮估宽：用来算一行能放几个（自动换行用）
+
     def _toolbar(self, buttons, primary=None):
         """页面顶部的一条胶囊渐变按钮（(文字, 命令) 或 (图标, 文字, 命令)）。
 
         primary 传文字时，那个按钮会用强调色渐变（视觉主操作）。
         """
         c = self.C
-        bar = tk.Frame(self, bg=c["app_bg"])
-        bar.pack(fill="x", padx=16, pady=(12, 6))
+        host = tk.Frame(self, bg=c["app_bg"])
+        host.pack(fill="x", padx=16, pady=(12, 6))
+        items = []
         for item in buttons:
-            icon = None
             if len(item) == 3:
                 icon, text, cmd = item
             else:
                 text, cmd = item
-            btn = ModernButton(bar, text=text, command=cmd, c=c, icon=icon,
-                               primary=(text == primary))
-            btn.pack(side="left", padx=(0, 10))
-        return bar
+                icon = None
+            items.append((icon, text, cmd, text == primary))
+        self._button_row(host, items)
+        return host
+
+    def _button_row(self, parent, items):
+        """一排会自动换行的按钮：(图标, 文字, 命令, 是否主操作)。
+
+        以前固定一行 pack 到底，窗口缩小时右边的按钮直接被挤出可视区。
+        现在按容器宽度决定每行放几个，窄窗口自动折行。
+        """
+        grid = tk.Frame(parent, bg=self.C["app_bg"])
+        # 必须 expand：空容器请求宽度是 0，不撑开的话它永远量不到宽度，
+        # 按钮也就永远不会创建（先有宽度才有按钮，不是先有按钮才有宽度）
+        grid.pack(side="left", fill="x", expand=True)
+        state = {"n": 0}
+
+        def relayout(_=None):
+            w = grid.winfo_width()
+            if w <= 1:
+                return
+            n = max(1, min(len(items), w // self.BTN_W))
+            if n == state["n"] and grid.winfo_children():
+                return
+            state["n"] = n
+            for child in grid.winfo_children():
+                child.destroy()
+            for i, (icon, text, cmd, primary) in enumerate(items):
+                ModernButton(grid, text=text, command=cmd, c=self.C,
+                             icon=icon, primary=primary).grid(
+                    row=i // n, column=i % n, padx=(0, 10), pady=(0, 6),
+                    sticky="w")
+
+        grid.bind("<Configure>", relayout)
+        return grid
 
 
 # ======================================================================
@@ -320,18 +353,17 @@ class DesktopPage(BasePage):
         self.selbar = bar
         self.sel_label = tk.Label(bar, text="", bg=c["app_bg"], fg=c["accent"],
                                   font=font(10, "bold"))
-        self.sel_label.pack(side="left", padx=(0, 10))
+        self.sel_label.pack(anchor="w", pady=(0, 4))
 
         self.sel_menu = tk.Menu(self, tearoff=0)
         style_menu(self.sel_menu, c)
-        ModernButton(bar, text="移入分类 ▾", command=self._popup_move, c=c,
-                     icon="folder", primary=True).pack(side="left", padx=(0, 8))
-        ModernButton(bar, text="移出分类", command=self._unassign_selected,
-                     c=c, icon="close").pack(side="left", padx=(0, 8))
-        ModernButton(bar, text="撤销上一步", command=self._undo,
-                     c=c, icon="refresh").pack(side="left", padx=(0, 8))
-        ModernButton(bar, text="取消选择", command=self._clear_selection,
-                     c=c, icon="close").pack(side="left")
+        # 窄窗口下按钮会自动折行，不会挤成一团或跑出可视区
+        self._button_row(bar, [
+            ("folder", "移入分类 ▾", self._popup_move, True),
+            ("close", "移出分类", self._unassign_selected, False),
+            ("refresh", "撤销上一步", self._undo, False),
+            ("close", "取消选择", self._clear_selection, False),
+        ])
 
     def _popup_move(self):
         if not self.selected:
