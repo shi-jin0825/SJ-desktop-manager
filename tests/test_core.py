@@ -173,5 +173,64 @@ class ConfigTest(unittest.TestCase):
         self.assertEqual(item_key(r"C:\A\b.TXT"), item_key("c:/a/B.txt"))
 
 
+class UndoStackTest(unittest.TestCase):
+    """首页「撤销上一步」用的栈：单项操作不能吃掉批量记录。"""
+
+    def test_batch_then_single_keeps_both(self):
+        from core.undo import UndoStack
+        st = UndoStack()
+        st.push([("a", ""), ("b", ""), ("c", "")])     # 批量移入
+        st.push([("d", "工具")])                        # 右键单项
+        self.assertEqual(len(st), 2)
+        self.assertEqual(st.pop(), [("d", "工具")])
+        # 关键：批量那一步还在，不会被单项覆盖
+        self.assertEqual(st.pop(), [("a", ""), ("b", ""), ("c", "")])
+        self.assertIsNone(st.pop())
+
+    def test_depth_capped(self):
+        from core.undo import UndoStack
+        st = UndoStack(depth=3)
+        for i in range(5):
+            st.push([("p%d" % i, "")])
+        self.assertEqual(len(st), 3)
+        self.assertEqual(st.pop(), [("p4", "")])
+        self.assertEqual(st.last_size, 1)
+
+    def test_empty_push_ignored(self):
+        from core.undo import UndoStack
+        st = UndoStack()
+        self.assertFalse(st.push([]))
+        self.assertEqual(len(st), 0)
+        self.assertFalse(bool(st))
+
+    def test_group_by_category(self):
+        from core.undo import UndoStack
+        step = [("a", "工具"), ("b", ""), ("c", "工具")]
+        self.assertEqual(UndoStack.group(step),
+                         {"工具": ["a", "c"], "": ["b"]})
+
+
+class IconsCacheKeyTest(unittest.TestCase):
+    """图标缓存 key：斜杠写法不同不能变成两条缓存。"""
+
+    def test_slash_variants_share_one_key(self):
+        from core.icons import cache_key
+        self.assertEqual(cache_key(r"C:\Users\me\a.lnk", 48),
+                         cache_key("C:/Users/me/a.lnk", 48))
+        self.assertEqual(cache_key(r"C:\USERS\me\A.LNK", 48),
+                         cache_key(r"c:\users\me\a.lnk", 48))
+
+    def test_size_matters(self):
+        from core.icons import cache_key
+        self.assertNotEqual(cache_key(r"C:\a.lnk", 48),
+                            cache_key(r"C:\a.lnk", 32))
+
+    def test_matches_config_item_key(self):
+        """缓存 key 与 config 的归类 key 用同一套规范化，避免两边不一致。"""
+        from core.icons import cache_key
+        self.assertEqual(cache_key(r"C:\A\b.txt", 48)[0],
+                         item_key("c:/a/B.txt"))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

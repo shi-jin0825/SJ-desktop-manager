@@ -225,6 +225,19 @@ _RGBA_CACHE = {}
 CACHE_LIMIT = 400
 
 
+_CacheKey = tuple   # (规范化路径, 尺寸)
+
+
+def cache_key(path: str, size: int) -> _CacheKey:
+    r"""缓存 key：路径按 normcase 规范化（和配置层的 item_key 保持一致）。
+
+    早先用 .lower()，只把大小写拍平而没统一分隔符，于是同一个文件的
+    "C:/x/a.lnk" 与 "C:\x\a.lnk" 两种写法会被当成两个不同的条目，白白
+    多提取一次图标、多占一份内存。
+    """
+    return (os.path.normcase(os.path.abspath(path)), size)
+
+
 def _bump(cache, key, value):
     """写入缓存并在超限时做 LRU 淘汰（dict 保持插入顺序）。"""
     cache.pop(key, None)          # 重新插入到末尾 = 最近使用
@@ -245,7 +258,7 @@ def icon_rgba(path: str, size: int = 48):
     """取图标原始像素，返回 (w, h, RGBA bytes)；失败返回 None。"""
     if not _WIN:
         return None
-    key = (os.path.abspath(path).lower(), size)
+    key = cache_key(path, size)
     if key in _RGBA_CACHE:
         got = _RGBA_CACHE.pop(key)      # 命中就挪到末尾（LRU）
         _RGBA_CACHE[key] = got
@@ -265,7 +278,7 @@ def icon_png(path: str, size: int = 48):
     """取某个路径的真实图标 PNG 字节；取不到返回 None。"""
     if not _WIN:
         return None
-    key = (os.path.abspath(path).lower(), size)
+    key = cache_key(path, size)
     if key in _PNG_CACHE:
         png = _PNG_CACHE.pop(key)
         _PNG_CACHE[key] = png

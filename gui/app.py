@@ -18,6 +18,7 @@ from core.config import ConfigManager
 from core.icons import icon_png  # noqa: F401（保持与旧引用兼容）
 from core import hotkey
 from gui.theme import DEFAULT_THEME, THEMES, THEME_NAMES, get_theme
+from gui.fonts import font
 from gui.pages import PAGE_BY_KEY, DesktopPage
 from gui.navicons import IconLabel
 from gui.widgets import (center_window, load_image_file, hline, ModernButton,
@@ -80,6 +81,7 @@ class App(tk.Tk):
 
         self._build_shell()
         self._show_page("home")
+        self._notify_load_status()
 
         self.bind("<F5>", self._on_f5)
         self.bind_all("<MouseWheel>", self._on_wheel)
@@ -159,6 +161,25 @@ class App(tk.Tk):
                 except Exception:
                     pass
 
+    def _notify_load_status(self):
+        """配置层记录了"这次读取不顺利"时，明确告诉用户一次。
+
+        load_status 之前只躺在 ConfigManager 里没人读 —— 用户看到的是
+        "分类怎么少了"，而不是"配置损坏已恢复"。
+        """
+        status = getattr(self.config_mgr, "load_status", "")
+        if not status:
+            return
+        note = getattr(self.config_mgr, "status_note", "")
+        title = ("⚠ 配置已自动恢复" if status == "recovered"
+                 else "⚠ 配置已重置")
+        tip = ("备份文件可以在程序目录下找到（config.json.bak）；"
+               "损坏的原件没有删除，已改名保留。"
+               if status == "recovered" else
+               "建议先检查程序目录下的 config.json.corrupt-* 文件。")
+        self.after(300, lambda: messagebox.showwarning(
+            title, f"{note}\n\n{tip}", parent=self))
+
     def _set_icon(self):
         ico = os.path.join(ASSETS, "momo.ico")
         if os.path.isfile(ico):
@@ -180,11 +201,11 @@ class App(tk.Tk):
         topbar.pack_propagate(False)
         self.page_title = tk.Label(topbar, text="", bg=self.C["topbar_bg"],
                                    fg=self.C["text"],
-                                   font=("Microsoft YaHei", 14, "bold"))
+                                   font=font(14, "bold"))
         self.page_title.pack(side="left", padx=20)
         self.page_sub = tk.Label(topbar, text="", bg=self.C["topbar_bg"],
                                  fg=self.C["sidebar_muted"],
-                                 font=("Microsoft YaHei", 9))
+                                 font=font(9))
         self.page_sub.pack(side="left", padx=4)
         hline(self.main, self.C["divider"], pady=0)
 
@@ -221,15 +242,15 @@ class App(tk.Tk):
                 anchor="w" if not self.collapsed else "center")
         else:
             tk.Label(box, text="🐙", bg=c["sidebar_bg"],
-                     font=("Microsoft YaHei", 22)).pack()
+                     font=font(22)).pack()
         if not self.collapsed:
             user = os.environ.get("USERNAME") or os.environ.get("USER") or "本机用户"
             tk.Label(box, text=user, bg=c["sidebar_bg"], fg=c["text"],
-                     font=("Microsoft YaHei", 11, "bold"), anchor="w").pack(
+                     font=font(11, "bold"), anchor="w").pack(
                 fill="x", pady=(6, 0))
             done = len(self.config_mgr.data.get("assignments", {}))
             tk.Label(box, text=f"已归类 {done} 项", bg=c["sidebar_bg"],
-                     fg=c["sidebar_muted"], font=("Microsoft YaHei", 8),
+                     fg=c["sidebar_muted"], font=font(8),
                      anchor="w").pack(fill="x")
 
     # ---------------- 全局搜索 ----------------
@@ -336,8 +357,7 @@ class App(tk.Tk):
         else:
             ic.pack(side="left", padx=(11, 10))
             lab = tk.Label(inner, text=label, bg=bg, fg=fg, anchor="w",
-                           font=("Microsoft YaHei", 11,
-                                 "bold" if active else "normal"))
+                           font=font(11, "bold" if active else "normal"))
             lab.pack(side="left", fill="x")
             targets = [item, inner, ic, lab]
 
@@ -389,7 +409,7 @@ class App(tk.Tk):
                 ic.pack(side="left", padx=(12, 10))
                 lab = tk.Label(inner, text=label, bg=c["sidebar_bg"],
                                fg=c["sidebar_muted"], anchor="w",
-                               font=("Microsoft YaHei", 10))
+                               font=font(10))
                 lab.pack(side="left", fill="x")
                 targets = [item, inner, ic, lab]
             enter, leave = self._hover_group(targets, c["sidebar_bg"],
@@ -423,10 +443,17 @@ class App(tk.Tk):
             pages = self._pages = {}
         page = pages.get(key)
         if page is not None and force:
+            hide = getattr(page, "on_hide", None)      # 先停掉它的定时器等副作用
+            if hide is not None:
+                try:
+                    hide()
+                except Exception:
+                    pass
             try:
                 page.destroy()
             except tk.TclError:
                 pass
+            pages.pop(key, None)
             page = None
         if page is None:
             page = page_cls(self.content, self)
@@ -519,7 +546,7 @@ class App(tk.Tk):
         """桌宠被收起时的回调：同步设置页按钮状态。"""
         self._pet = None
         if self.current_key == "settings":
-            self._show_page("settings")
+            self._show_page("settings", force=True)   # 按钮文字要重算
 
     # ---------------- 番茄钟 ----------------
     POMO_MIN, POMO_MAX = 1, 600        # 允许自定义的范围（分钟）
@@ -611,9 +638,13 @@ class App(tk.Tk):
             pass
 
     def refresh_pomodoro_ui(self):
-        """番茄钟状态变化后，刷新可能正在显示的页面（倒计时 / 设置）。"""
+        """番茄钟状态变化后，刷新可能正在显示的页面（倒计时 / 设置）。
+
+        页面现在会被缓存，_show_page 不带 force 只是把旧实例重新 pack 出来，
+        按钮文字不会重算 —— 这里必须强制重建。
+        """
         if self.current_key in ("countdowns", "settings"):
-            self._show_page(self.current_key)
+            self._show_page(self.current_key, force=True)
 
     # ---------------- 事件 ----------------
     def _on_f5(self, event=None):

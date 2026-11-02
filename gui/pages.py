@@ -8,14 +8,17 @@ import calendar
 import datetime as dt
 import os
 import tkinter as tk
-from tkinter import messagebox, simpledialog
+from tkinter import messagebox
 
 from core.scanner import scan_desktop, get_desktop_paths
 from core.icons import icon_png
 from core import sysinfo
 from core import countdown as cd
 from core import hotkey
+from core.undo import UndoStack
+from gui import category_ops
 from gui.theme import (DEFAULT_THEME, THEMES, THEME_NAMES, get_theme, style_menu)
+from gui.fonts import font
 from gui.widgets import (open_target, make_photo, rounded_rect, short_name,
                          center_window, hline, stat_bar, shrink,
                          ModernButton, hover_card)
@@ -40,6 +43,8 @@ PREVIEW_PAD = 3
 PREVIEW_COLS = 3
 MAX_PREVIEW = PREVIEW_COLS ** 2
 
+UNDO_DEPTH = 10         # 「撤销上一步」最多记住几步整理操作
+
 APP_VERSION = "v1.0"
 KIND_LABEL = {"shortcut": "快捷方式", "dir": "文件夹", "file": "文件"}
 
@@ -60,7 +65,7 @@ class CategoryWindow(tk.Toplevel):
         self._photos = []
         self.items = list(items)
 
-        self.head = tk.Label(self, text="", font=("Microsoft YaHei", 14, "bold"),
+        self.head = tk.Label(self, text="", font=font(14, "bold"),
                              bg=c["dialog_bg"], fg=c["text"])
         self.head.pack(pady=10)
         self.frame = tk.Frame(self, bg=c["dialog_bg"])
@@ -88,14 +93,14 @@ class CategoryWindow(tk.Toplevel):
             if icon:
                 btn = tk.Button(self.frame, image=icon,
                                 text=short_name(item.display_name),
-                                compound="top", font=("Microsoft YaHei", 9),
+                                compound="top", font=font(9),
                                 width=90, height=86, relief="flat",
                                 bg=c["panel_bg"], fg=c["text"],
                                 activebackground=c["panel_active"],
                                 command=lambda p=item.path: open_target(p))
             else:
                 btn = tk.Button(self.frame, text=f"📄\n{short_name(item.display_name)}",
-                                font=("Microsoft YaHei", 9),
+                                font=font(9),
                                 width=10, height=4, relief="flat",
                                 bg=c["panel_bg"], fg=c["text"],
                                 activebackground=c["panel_active"],
@@ -183,7 +188,8 @@ class DesktopPage(BasePage):
         self._scrollable = False
         self.selected = set()      # 多选：存桌面项路径
         self._anchor = None        # Shift 连选的起点
-        self._last_op = None       # 上一步批量操作（用于撤销）
+        self._undo_stack = UndoStack(UNDO_DEPTH)   # 最近几步整理（可连续撤销）
+        self._visible_items = []   # 当前过滤后真正显示在网格里的项
         self._icon_queue = []      # 待加载图标队列（懒加载，避免首屏卡顿）
         self._icon_job = None
         super().__init__(master, app)
@@ -240,7 +246,7 @@ class DesktopPage(BasePage):
         bar = tk.Frame(self.sel_host, bg=c["app_bg"])
         self.selbar = bar
         self.sel_label = tk.Label(bar, text="", bg=c["app_bg"], fg=c["accent"],
-                                  font=("Microsoft YaHei", 10, "bold"))
+                                  font=font(10, "bold"))
         self.sel_label.pack(side="left", padx=(0, 10))
 
         self.sel_menu = tk.Menu(self, tearoff=0)
@@ -255,6 +261,12 @@ class DesktopPage(BasePage):
                      c=c, icon="close").pack(side="left")
 
     def _popup_move(self):
+        if not self.selected:
+            messagebox.showinfo("移入分类",
+                                "还没选中项目～\n"
+                                "Ctrl + 点击磁贴可多选，Shift + 点击可连选一片。",
+                                parent=self.app)
+            return
         menu = self.sel_menu
         menu.delete(0, "end")
         for cat in self.cfg.categories:
@@ -265,14 +277,26 @@ class DesktopPage(BasePage):
         menu.tk_popup(self.winfo_pointerx(), self.winfo_pointery())
 
     def _update_selbar(self):
+        """选中项 > 0 时显形；没有选中但还有可撤销的步骤时也留着，
+        否则「批量移入 → 选择被清空」之后就再也找不到撤销按钮了。
+        """
         n = len(self.selected)
+        undo = len(self._undo_stack)
         shown = getattr(self, "_selbar_shown", False)
         if n:
-            self.sel_label.config(text=f"已选 {n} 项")
-        if n and not shown:
+            text = f"已选 {n} 项"
+            if undo:
+                text += f" · 可撤销 {undo} 步"
+        elif undo:
+            text = f"上次整理了 {self._undo_stack.last_size} 项 · 可撤销 {undo} 步"
+        else:
+            text = ""
+        self.sel_label.config(text=text)
+        want = bool(n or undo)
+        if want and not shown:
             self.selbar.pack(fill="x", pady=(0, 6))
             self._selbar_shown = True
-        elif not n and shown:
+        elif not want and shown:
             self.selbar.pack_forget()
             self._selbar_shown = False
 
@@ -288,21 +312,34 @@ class DesktopPage(BasePage):
         self._refresh_selection()
 
     def _range_select(self, path):
-        """Shift + 点击：从上一个锚点连选到这一项。"""
-        paths = [i.path for i in self.items]
+        """Shift + 点击：从上一个锚点连选到这一项。
+
+        区间只能在「当前可见」的项里算：搜索过滤掉的项不在网格上，把它们
+        悄悄加进选中集会让「已选 N 项」和实际看到的高亮对不上。
+        """
+        paths = [i.path for i in (self._visible_items or self.items)]
         if self._anchor in paths and path in paths:
             a, b = paths.index(self._anchor), paths.index(path)
             for p in paths[min(a, b):max(a, b) + 1]:
                 self.selected.add(p)
         else:
             self.selected.add(path)
-            self._anchor = path
+        self._anchor = path
         self._refresh_selection()
 
     def _clear_selection(self):
         self.selected.clear()
         self._anchor = None
         self._refresh_selection()
+
+    def _drop_from_selection(self, *paths):
+        """单项操作后把这一项移出选中集：它已经不在未分类网格里了，
+        留着会让「已选 N 项」虚高。
+        """
+        for p in paths:
+            self.selected.discard(p)
+        if self._anchor in paths:
+            self._anchor = None
 
     def _refresh_selection(self):
         """只改磁贴的选中边框，不整页重建（避免闪烁、也保住滚动位置）。"""
@@ -321,8 +358,8 @@ class DesktopPage(BasePage):
         self._update_selbar()
 
     def _snapshot(self, paths):
-        """批量操作前记一份旧分类，供「撤销上一步」用。"""
-        self._last_op = [(p, self.cfg.get_category(p)) for p in paths]
+        """记一步可撤销的操作（各项操作前的旧分类），见 core/undo.py。"""
+        self._undo_stack.push([(p, self.cfg.get_category(p)) for p in paths])
 
     def _assign_selected(self, category):
         paths = list(self.selected)
@@ -331,7 +368,7 @@ class DesktopPage(BasePage):
         self._snapshot(paths)
         self.cfg.assign_batch(paths, category)
         self._clear_selection()
-        self.refresh()
+        self.refresh(rescan=False)
 
     def _unassign_selected(self):
         paths = list(self.selected)
@@ -340,23 +377,23 @@ class DesktopPage(BasePage):
         self._snapshot(paths)
         self.cfg.unassign_batch(paths)
         self._clear_selection()
-        self.refresh()
+        self.refresh(rescan=False)
 
     def _undo(self):
-        """撤销上一步批量操作（把各项恢复成原来的分类）。"""
-        if not self._last_op:
+        """撤销上一步操作（把各项恢复成原来的分类），可连续多步。"""
+        step = self._undo_stack.pop()
+        if step is None:
             messagebox.showinfo("撤销", "还没有可撤销的操作～", parent=self.app)
             return
-        restores = {}
-        for path, cat in self._last_op:
-            restores.setdefault(cat or "", []).append(path)
-        for cat, paths in restores.items():
+        for cat, paths in self._undo_stack.group(step).items():
             if cat:
                 self.cfg.assign_batch(paths, cat)
             else:
                 self.cfg.unassign_batch(paths)
-        self._last_op = None
-        self.refresh()
+        self.selected.clear()
+        self._anchor = None
+        self.refresh(rescan=False)
+        self._update_selbar()
 
     # ---- 自适应布局 ----
     def _on_grid_configure(self, event=None):
@@ -387,7 +424,7 @@ class DesktopPage(BasePage):
 
     def _do_relayout(self):
         self._relayout_job = None
-        self.refresh()
+        self.refresh(rescan=False)      # 只是换列数，桌面内容没变，不用重扫
 
     def _cols_for_width(self, width: int) -> int:
         per = TILE_SIZE + TILE_PADX * 2 + 4
@@ -457,6 +494,8 @@ class DesktopPage(BasePage):
                      if query in (i.name or "").lower()
                      or query in (i.display_name or "").lower()
                      or query in (i.category or "").lower()]
+        # 记下这一轮真正画出来的项：Shift 连选的区间以它为准
+        self._visible_items = items
         categories = [cat for cat in self.cfg.categories
                       if not query or query in cat.lower()
                       or any(i.category == cat for i in items)]
@@ -474,10 +513,10 @@ class DesktopPage(BasePage):
             box = tk.Frame(self.grid_frame, bg=self.C["app_bg"])
             box.pack(pady=60)
             tk.Label(box, text="🔍", bg=self.C["app_bg"], fg=self.C["text"],
-                     font=("Microsoft YaHei", 28)).pack()
+                     font=font(28)).pack()
             tk.Label(box, text=f"没有找到与「{self.app.query}」匹配的项目",
                      bg=self.C["app_bg"], fg=self.C["sidebar_muted"],
-                     font=("Microsoft YaHei", 11)).pack(pady=(6, 0))
+                     font=font(11)).pack(pady=(6, 0))
             self._on_grid_configure()
             self.app.update_topbar(f"搜索「{self.app.query}」· 0 个结果")
             return
@@ -585,11 +624,11 @@ class DesktopPage(BasePage):
         else:
             canvas.create_text(FOLDER_PREVIEW // 2, FOLDER_PREVIEW // 2,
                                text="空", fill=c["empty_text"],
-                               font=("Microsoft YaHei", 12, "bold"))
+                               font=font(12, "bold"))
 
         label = tk.Label(frame, text=f"{short_name(category)} ({count})",
                          bg=c["folder_bg"], fg=c["text"],
-                         font=("Microsoft YaHei", 9), cursor="hand2",
+                         font=font(9), cursor="hand2",
                          wraplength=TILE_SIZE - 10, justify="center")
         label.pack(pady=(4, 0))
 
@@ -624,7 +663,7 @@ class DesktopPage(BasePage):
         blank = tk.PhotoImage(width=ICON_SIZE, height=ICON_SIZE)
         self._photos.append(blank)
         btn = tk.Button(slot, image=blank, text=f"{emoji}\n{name}",
-                        compound="top", font=("Microsoft YaHei", 9),
+                        compound="top", font=font(9),
                         width=TILE_SIZE, height=TILE_H, relief="flat",
                         bg=c["panel_bg"], fg=c["text"],
                         activebackground=c["panel_active"],
@@ -703,42 +742,34 @@ class DesktopPage(BasePage):
     def _open_category(self, category):
         items = [i for i in self.items if i.category == category]
         CategoryWindow(self.app, category, items, self.cfg,
-                       on_change=self.refresh, theme=self.C)
+                       on_change=lambda: self.refresh(rescan=False), theme=self.C)
 
     def _assign(self, path, category):
         self._snapshot([path])
         self.cfg.assign(path, category)
-        self.refresh()
+        self._drop_from_selection(path)
+        self.refresh(rescan=False)
+        self._update_selbar()
 
     def _unassign(self, path):
         self._snapshot([path])
         self.cfg.unassign(path)
-        self.refresh()
+        self._drop_from_selection(path)
+        self.refresh(rescan=False)
+        self._update_selbar()
 
+    # ---- 分类增删改：统一走 gui/category_ops 的公共层 ----
     def _add_category(self):
-        name = simpledialog.askstring("新建分类", "分类名称：", parent=self.app)
-        if name is not None:
-            if not self.cfg.add_category(name):
-                messagebox.showwarning("提示", "分类名称为空或已存在", parent=self.app)
-            self.refresh()
+        if category_ops.create_category(self.cfg, self.app) is not None:
+            self.refresh(rescan=False)
 
     def _rename_category(self, category):
-        new = simpledialog.askstring("重命名分类", "新的分类名称：",
-                                     initialvalue=category, parent=self.app)
-        if new is None:
-            return
-        if not self.cfg.rename_category(category, new):
-            if (new or "").strip() != category:
-                messagebox.showwarning("提示", "分类名称为空或已存在", parent=self.app)
-            return
-        self.refresh()
+        if category_ops.rename_category(self.cfg, category, self.app) is not None:
+            self.refresh(rescan=False)
 
     def _delete_category(self, category):
-        if messagebox.askyesno("删除分类",
-                               f"删除分类「{category}」？\n其中的项目将回到未分类状态。",
-                               parent=self.app):
-            self.cfg.remove_category(category)
-            self.refresh()
+        if category_ops.delete_category(self.cfg, category, self.app):
+            self.refresh(rescan=False)
 
     def _manage_categories(self):
         """分类管理器（弹窗）：新建 / 重命名 / 删除。"""
@@ -754,14 +785,14 @@ class DesktopPage(BasePage):
         top = tk.Frame(win, bg=c["dialog_bg"])
         top.pack(fill="both", expand=True, padx=12, pady=(12, 0))
         tk.Label(top, text="分类列表（括号内为项目数）",
-                 font=("Microsoft YaHei", 10), bg=c["dialog_bg"], fg=c["text"],
+                 font=font(10), bg=c["dialog_bg"], fg=c["text"],
                  anchor="w").pack(fill="x")
 
         body = tk.Frame(top, bg=c["dialog_bg"])
         body.pack(fill="both", expand=True, pady=6)
         scroll = tk.Scrollbar(body)
         scroll.pack(side="right", fill="y")
-        lst = tk.Listbox(body, font=("Microsoft YaHei", 10), relief="solid",
+        lst = tk.Listbox(body, font=font(10), relief="solid",
                          bd=1, activestyle="none", height=10,
                          bg=c["panel_bg"], fg=c["text"],
                          selectbackground=c["list_sel"],
@@ -786,42 +817,31 @@ class DesktopPage(BasePage):
             return self.cfg.categories[sel[0]] if sel else None
 
         def do_add():
-            name = simpledialog.askstring("新建分类", "分类名称：", parent=win)
+            name = category_ops.create_category(self.cfg, win)
             if name is None:
                 return
-            if not self.cfg.add_category(name):
-                messagebox.showwarning("提示", "分类名称为空或已存在", parent=win)
-                return
-            reload(self.cfg.categories.index(name.strip()))
-            self.refresh()
+            reload(self.cfg.categories.index(name))
+            self.refresh(rescan=False)
 
         def do_rename():
             old = selected()
             if old is None:
                 messagebox.showinfo("提示", "请先选择一个分类", parent=win)
                 return
-            new = simpledialog.askstring("重命名分类", "新的分类名称：",
-                                         initialvalue=old, parent=win)
+            new = category_ops.rename_category(self.cfg, old, win)
             if new is None:
                 return
-            if not self.cfg.rename_category(old, new):
-                if (new or "").strip() != old:
-                    messagebox.showwarning("提示", "分类名称为空或已存在", parent=win)
-                return
-            reload(self.cfg.categories.index(new.strip()))
-            self.refresh()
+            reload(self.cfg.categories.index(new))
+            self.refresh(rescan=False)
 
         def do_delete():
             cat = selected()
             if cat is None:
                 messagebox.showinfo("提示", "请先选择一个分类", parent=win)
                 return
-            if messagebox.askyesno(
-                    "删除分类",
-                    f"删除分类「{cat}」？\n其中的项目将回到未分类状态。", parent=win):
-                self.cfg.remove_category(cat)
+            if category_ops.delete_category(self.cfg, cat, win):
                 reload()
-                self.refresh()
+                self.refresh(rescan=False)
 
         bar = tk.Frame(win, bg=c["dialog_bg"])
         bar.pack(fill="x", padx=12, pady=8)
@@ -871,7 +891,7 @@ class CategoriesPage(BasePage):
         if not self.cfg.categories:
             tk.Label(self.body, text="还没有分类，点右上角「➕ 新建分类」创建第一个",
                      bg=c["app_bg"], fg=c["text_muted"],
-                     font=("Microsoft YaHei", 11)).pack(pady=40)
+                     font=font(11)).pack(pady=40)
             self.app.update_topbar("暂无分类")
             return
 
@@ -903,20 +923,20 @@ class CategoriesPage(BasePage):
         mid = tk.Frame(card, bg=c["card_bg"])
         mid.pack(side="left", fill="both", expand=True)
         tk.Label(mid, text=f"📁 {category}", bg=c["card_bg"], fg=c["text"],
-                 font=("Microsoft YaHei", 12, "bold"), anchor="w").pack(fill="x")
+                 font=font(12, "bold"), anchor="w").pack(fill="x")
         names = "、".join(short_name(i.display_name, 10) for i in inner[:6])
         if len(inner) > 6:
             names += f" 等 {len(inner)} 项"
         tk.Label(mid, text=names if names else "（空分类）",
                  bg=c["card_bg"], fg=c["sidebar_muted"],
-                 font=("Microsoft YaHei", 9), anchor="w").pack(fill="x")
+                 font=font(9), anchor="w").pack(fill="x")
 
         btns = tk.Frame(card, bg=c["card_bg"])
         btns.pack(side="right")
         for text, cmd in (("打开", lambda: self._open(category)),
                           ("重命名", lambda: self._rename(category)),
                           ("删除", lambda: self._delete(category))):
-            tk.Button(btns, text=text, font=("Microsoft YaHei", 9),
+            tk.Button(btns, text=text, font=font(9),
                       relief="flat", bg=c["panel_bg"], fg=c["text"],
                       activebackground=c["panel_active"], bd=0,
                       padx=10, pady=3, command=cmd).pack(side="left", padx=3)
@@ -927,29 +947,15 @@ class CategoriesPage(BasePage):
                        on_change=self.refresh, theme=self.C)
 
     def _add(self):
-        name = simpledialog.askstring("新建分类", "分类名称：", parent=self.app)
-        if name is None:
-            return
-        if not self.cfg.add_category(name):
-            messagebox.showwarning("提示", "分类名称为空或已存在", parent=self.app)
-        self.refresh()
+        if category_ops.create_category(self.cfg, self.app) is not None:
+            self.refresh()
 
     def _rename(self, old):
-        new = simpledialog.askstring("重命名分类", "新的分类名称：",
-                                     initialvalue=old, parent=self.app)
-        if new is None:
-            return
-        if not self.cfg.rename_category(old, new):
-            if (new or "").strip() != old:
-                messagebox.showwarning("提示", "分类名称为空或已存在", parent=self.app)
-            return
-        self.refresh()
+        if category_ops.rename_category(self.cfg, old, self.app) is not None:
+            self.refresh()
 
     def _delete(self, category):
-        if messagebox.askyesno("删除分类",
-                               f"删除分类「{category}」？\n其中的项目将回到未分类状态。",
-                               parent=self.app):
-            self.cfg.remove_category(category)
+        if category_ops.delete_category(self.cfg, category, self.app):
             self.refresh()
 
 
@@ -989,9 +995,9 @@ class StatsPage(BasePage):
                             highlightbackground=c["divider"], padx=14, pady=12)
             card.grid(row=0, column=idx, padx=6, pady=6, sticky="nsew")
             tk.Label(card, text=str(num), bg=c["card_bg"], fg=c["accent"],
-                     font=("Microsoft YaHei", 20, "bold")).pack()
+                     font=font(20, "bold")).pack()
             tk.Label(card, text=label, bg=c["card_bg"], fg=c["sidebar_muted"],
-                     font=("Microsoft YaHei", 9)).pack()
+                     font=font(9)).pack()
 
         # 分类分布
         self._section("分类分布")
@@ -1017,7 +1023,7 @@ class StatsPage(BasePage):
     def _section(self, text):
         c = self.C
         tk.Label(self.body, text=text, bg=c["app_bg"], fg=c["text"],
-                 font=("Microsoft YaHei", 11, "bold"), anchor="w").pack(
+                 font=font(11, "bold"), anchor="w").pack(
             fill="x", pady=(14, 4))
         hline(self.body, c["divider"], pady=(0, 8))
 
@@ -1026,11 +1032,11 @@ class StatsPage(BasePage):
         row = tk.Frame(self.body, bg=c["app_bg"])
         row.pack(fill="x", pady=3)
         tk.Label(row, text=name, bg=c["app_bg"], fg=c["text"],
-                 font=("Microsoft YaHei", 10), width=12, anchor="w").pack(side="left")
+                 font=font(10), width=12, anchor="w").pack(side="left")
         stat_bar(row, (n / total) if total else 0, c, width=260, height=10)
         pct = f"{n / total * 100:.0f}%" if total else "0%"
         tk.Label(row, text=f"{n} 项 · {pct}", bg=c["app_bg"], fg=c["sidebar_muted"],
-                 font=("Microsoft YaHei", 9)).pack(side="left", padx=10)
+                 font=font(9)).pack(side="left", padx=10)
 
 
 # ======================================================================
@@ -1053,7 +1059,7 @@ class SystemPage(BasePage):
         bar = self._toolbar([("refresh", "立即刷新", self._tick)])
         tk.Label(bar, text="每 1 秒自动刷新 · 数据来自 Windows 系统接口",
                  bg=c["app_bg"], fg=c["sidebar_muted"],
-                 font=("Microsoft YaHei", 9)).pack(side="left")
+                 font=font(9)).pack(side="left")
 
         body = tk.Frame(self, bg=c["app_bg"])
         body.pack(fill="both", expand=True, padx=16, pady=(0, 12))
@@ -1068,7 +1074,7 @@ class SystemPage(BasePage):
 
         tk.Label(body, text=f"CPU 使用率（最近 {self.HISTORY} 秒）",
                  bg=c["app_bg"], fg=c["text"],
-                 font=("Microsoft YaHei", 11, "bold"), anchor="w").pack(
+                 font=font(11, "bold"), anchor="w").pack(
             fill="x", pady=(14, 4))
         self.graph = tk.Canvas(body, height=self.GRAPH_H, bg=c["card_bg"],
                                highlightthickness=1,
@@ -1105,15 +1111,15 @@ class SystemPage(BasePage):
                         highlightbackground=c["divider"], padx=14, pady=12)
         card.grid(row=0, column=col, padx=6, pady=6, sticky="nsew")
         tk.Label(card, text=title, bg=c["card_bg"], fg=c["sidebar_muted"],
-                 font=("Microsoft YaHei", 9), anchor="w").pack(fill="x")
+                 font=font(9), anchor="w").pack(fill="x")
         val = tk.Label(card, text="—", bg=c["card_bg"], fg=c["accent"],
-                       font=("Microsoft YaHei", 20, "bold"), anchor="w")
+                       font=font(20, "bold"), anchor="w")
         val.pack(fill="x", pady=(4, 2))
         meter = tk.Canvas(card, width=self.METER_W, height=10,
                           bg=c["stat_bar_bg"], highlightthickness=0, bd=0)
         meter.pack(anchor="w", pady=4)
         sub = tk.Label(card, text="", bg=c["card_bg"], fg=c["sidebar_muted"],
-                       font=("Microsoft YaHei", 9), anchor="w")
+                       font=font(9), anchor="w")
         sub.pack(fill="x")
         return val, meter, sub
 
@@ -1183,7 +1189,7 @@ class SystemPage(BasePage):
             y = y1 - span * pct / 100.0
             cv.create_line(40, y, w - 8, y, fill=c["divider"])
             cv.create_text(34, y, text=f"{pct}%", anchor="e",
-                           fill=c["sidebar_muted"], font=("Microsoft YaHei", 7))
+                           fill=c["sidebar_muted"], font=font(7))
         hist = self._history
         if len(hist) >= 2:
             step = (w - 48) / float(self.HISTORY - 1)
@@ -1199,10 +1205,10 @@ class SystemPage(BasePage):
                            pts[-1][0] + 3, pts[-1][1] + 3,
                            fill=c["stat_bar"], outline="")
             cv.create_text(w - 8, 12, text=f"当前 {hist[-1]:.0f}%", anchor="ne",
-                           fill=c["text"], font=("Microsoft YaHei", 9, "bold"))
+                           fill=c["text"], font=font(9, "bold"))
         else:
             cv.create_text(w // 2, h // 2, text="采集中…", fill=c["sidebar_muted"],
-                           font=("Microsoft YaHei", 10))
+                           font=font(10))
 
     def destroy(self):
         """页面销毁时停掉定时任务，避免回调打到已销毁的控件。"""
@@ -1236,7 +1242,7 @@ class CountdownDialog(tk.Toplevel):
         self.transient(master)
         self.grab_set()
 
-        tk.Label(self, text=self.title(), font=("Microsoft YaHei", 13, "bold"),
+        tk.Label(self, text=self.title(), font=font(13, "bold"),
                  bg=c["dialog_bg"], fg=c["text"]).pack(pady=(14, 12))
 
         form = tk.Frame(self, bg=c["dialog_bg"])
@@ -1254,7 +1260,7 @@ class CountdownDialog(tk.Toplevel):
 
         tk.Checkbutton(self, text="每年循环（生日 / 纪念日）",
                        variable=self.var_repeat,
-                       font=("Microsoft YaHei", 9),
+                       font=font(9),
                        bg=c["dialog_bg"], fg=c["text"],
                        selectcolor=c["panel_bg"],
                        activebackground=c["dialog_bg"],
@@ -1263,11 +1269,11 @@ class CountdownDialog(tk.Toplevel):
 
         btns = tk.Frame(self, bg=c["dialog_bg"])
         btns.pack(pady=16)
-        tk.Button(btns, text="保存", width=10, font=("Microsoft YaHei", 10),
+        tk.Button(btns, text="保存", width=10, font=font(10),
                   relief="flat", bg=c["accent"], fg=c["accent_fg"],
                   activebackground=c["accent"], bd=0, padx=8, pady=4,
                   command=self._save).pack(side="left", padx=6)
-        tk.Button(btns, text="取消", width=10, font=("Microsoft YaHei", 10),
+        tk.Button(btns, text="取消", width=10, font=font(10),
                   relief="flat", bg=c["panel_bg"], fg=c["text"],
                   activebackground=c["panel_active"], bd=0, padx=8, pady=4,
                   command=self.destroy).pack(side="left", padx=6)
@@ -1279,9 +1285,9 @@ class CountdownDialog(tk.Toplevel):
         c = self.C
         tk.Label(parent, text=label, width=5, anchor="w",
                  bg=c["dialog_bg"], fg=c["sidebar_muted"],
-                 font=("Microsoft YaHei", 10)).grid(row=row, column=0, pady=6)
+                 font=font(10)).grid(row=row, column=0, pady=6)
         tk.Entry(parent, textvariable=var, width=28,
-                 font=("Microsoft YaHei", 10), relief="flat",
+                 font=font(10), relief="flat",
                  bg=c["panel_bg"], fg=c["text"],
                  insertbackground=c["text"],
                  highlightthickness=1,
@@ -1294,7 +1300,7 @@ class CountdownDialog(tk.Toplevel):
         c = self.C
         tk.Label(parent, text="日期", width=5, anchor="w",
                  bg=c["dialog_bg"], fg=c["sidebar_muted"],
-                 font=("Microsoft YaHei", 10)).grid(row=row, column=0, pady=6)
+                 font=font(10)).grid(row=row, column=0, pady=6)
         cell = tk.Frame(parent, bg=c["dialog_bg"])
         cell.grid(row=row, column=1, sticky="ew", pady=6, padx=(8, 0))
 
@@ -1302,7 +1308,7 @@ class CountdownDialog(tk.Toplevel):
         cur = cd.parse_date(self.item.get("date")) or today
         lo_year = min(1970, cur.year)
 
-        kw = dict(font=("Microsoft YaHei", 11), width=5, justify="center",
+        kw = dict(font=font(11), width=5, justify="center",
                   relief="flat", bd=0, bg=c["panel_bg"], fg=c["text"],
                   buttonbackground=c["panel_bg"],
                   insertbackground=c["text"],
@@ -1325,22 +1331,22 @@ class CountdownDialog(tk.Toplevel):
 
         self.spin_y.pack(side="left")
         tk.Label(cell, text="年", bg=c["dialog_bg"], fg=c["sidebar_muted"],
-                 font=("Microsoft YaHei", 9)).pack(side="left", padx=(3, 8))
+                 font=font(9)).pack(side="left", padx=(3, 8))
         self.spin_m.pack(side="left")
         tk.Label(cell, text="月", bg=c["dialog_bg"], fg=c["sidebar_muted"],
-                 font=("Microsoft YaHei", 9)).pack(side="left", padx=(3, 8))
+                 font=font(9)).pack(side="left", padx=(3, 8))
         self.spin_d.pack(side="left")
         tk.Label(cell, text="日", bg=c["dialog_bg"], fg=c["sidebar_muted"],
-                 font=("Microsoft YaHei", 9)).pack(side="left", padx=(3, 8))
+                 font=font(9)).pack(side="left", padx=(3, 8))
 
-        tk.Button(cell, text="今天", font=("Microsoft YaHei", 9),
+        tk.Button(cell, text="今天", font=font(9),
                   relief="flat", bg=c["panel_bg"], fg=c["sidebar_muted"],
                   activebackground=c["panel_active"], bd=0, padx=8, pady=3,
                   command=self._set_today).pack(side="left")
 
         self._week_label = tk.Label(parent, text="", bg=c["dialog_bg"],
                                     fg=c["sidebar_muted"],
-                                    font=("Microsoft YaHei", 9))
+                                    font=font(9))
         self._week_label.grid(row=row + 1, column=1, sticky="w", padx=(8, 0))
         self._sync_date()
 
@@ -1424,17 +1430,17 @@ class PomodoroDialog(tk.Toplevel):
         self.resizable(False, False)
 
         tk.Label(self, text="🍅 自定义番茄钟",
-                 font=("Microsoft YaHei", 14, "bold"),
+                 font=font(14, "bold"),
                  bg=c["dialog_bg"], fg=c["text"]).pack(pady=(14, 4))
         tk.Label(self, text="选好时长后墨墨会捧着书陪你，头顶显示剩余时间",
-                 font=("Microsoft YaHei", 9),
+                 font=font(9),
                  bg=c["dialog_bg"], fg=c["sidebar_muted"]).pack()
 
         grid = tk.Frame(self, bg=c["dialog_bg"])
         grid.pack(fill="x", padx=24, pady=(14, 6))
         grid.grid_columnconfigure(1, weight=1)
 
-        kw = dict(font=("Microsoft YaHei", 11), width=5, justify="center",
+        kw = dict(font=font(11), width=5, justify="center",
                   relief="flat", bd=0, bg=c["panel_bg"], fg=c["text"],
                   buttonbackground=c["panel_bg"],
                   insertbackground=c["text"],
@@ -1444,35 +1450,35 @@ class PomodoroDialog(tk.Toplevel):
 
         tk.Label(grid, text="专注", anchor="w", bg=c["dialog_bg"],
                  fg=c["sidebar_muted"],
-                 font=("Microsoft YaHei", 10)).grid(row=0, column=0, pady=6)
+                 font=font(10)).grid(row=0, column=0, pady=6)
         self.spin_focus = tk.Spinbox(grid, from_=app.POMO_MIN, to=app.POMO_MAX,
                                      **kw)
         self.spin_focus.delete(0, "end")
         self.spin_focus.insert(0, str(app.pomo_minutes))
         self.spin_focus.grid(row=0, column=1, sticky="w", padx=(8, 0))
         tk.Label(grid, text="分钟", bg=c["dialog_bg"], fg=c["text"],
-                 font=("Microsoft YaHei", 10)).grid(row=0, column=2,
+                 font=font(10)).grid(row=0, column=2,
                                                     sticky="w", padx=6)
 
         tk.Label(grid, text="休息", anchor="w", bg=c["dialog_bg"],
                  fg=c["sidebar_muted"],
-                 font=("Microsoft YaHei", 10)).grid(row=1, column=0, pady=6)
+                 font=font(10)).grid(row=1, column=0, pady=6)
         self.spin_break = tk.Spinbox(grid, from_=app.POMO_MIN, to=app.POMO_MAX,
                                      **kw)
         self.spin_break.delete(0, "end")
         self.spin_break.insert(0, str(app.pomo_break))
         self.spin_break.grid(row=1, column=1, sticky="w", padx=(8, 0))
         tk.Label(grid, text="分钟", bg=c["dialog_bg"], fg=c["text"],
-                 font=("Microsoft YaHei", 10)).grid(row=1, column=2,
+                 font=font(10)).grid(row=1, column=2,
                                                     sticky="w", padx=6)
 
         preset = tk.Frame(self, bg=c["dialog_bg"])
         preset.pack(fill="x", padx=24, pady=(4, 6))
         tk.Label(preset, text="常用：", bg=c["dialog_bg"],
                  fg=c["sidebar_muted"],
-                 font=("Microsoft YaHei", 9)).pack(side="left")
+                 font=font(9)).pack(side="left")
         for m in POMO_PRESETS:
-            tk.Button(preset, text=f"{m} 分钟", font=("Microsoft YaHei", 9),
+            tk.Button(preset, text=f"{m} 分钟", font=font(9),
                       relief="flat", bg=c["panel_bg"], fg=c["text"],
                       activebackground=c["panel_active"], bd=0,
                       padx=8, pady=3,
@@ -1482,7 +1488,7 @@ class PomodoroDialog(tk.Toplevel):
         self.var_remember = tk.BooleanVar(value=True)
         tk.Checkbutton(self, text="记住为默认时长（下次直接开始）",
                        variable=self.var_remember,
-                       font=("Microsoft YaHei", 9),
+                       font=font(9),
                        bg=c["dialog_bg"], fg=c["text"],
                        selectcolor=c["panel_bg"],
                        activebackground=c["dialog_bg"],
@@ -1492,11 +1498,11 @@ class PomodoroDialog(tk.Toplevel):
 
         btns = tk.Frame(self, bg=c["dialog_bg"])
         btns.pack(pady=(10, 14))
-        tk.Button(btns, text="开始专注", font=("Microsoft YaHei", 10, "bold"),
+        tk.Button(btns, text="开始专注", font=font(10, "bold"),
                   relief="flat", bg=c["accent"], fg=c["accent_fg"],
                   activebackground=c["accent"], bd=0, padx=18, pady=5,
                   command=self._ok).pack(side="left", padx=6)
-        tk.Button(btns, text="取消", font=("Microsoft YaHei", 10),
+        tk.Button(btns, text="取消", font=font(10),
                   relief="flat", bg=c["panel_bg"], fg=c["text"],
                   activebackground=c["panel_active"], bd=0, padx=18, pady=5,
                   command=self.destroy).pack(side="left", padx=6)
@@ -1552,10 +1558,10 @@ class HotkeyDialog(tk.Toplevel):
         self.resizable(False, False)
 
         tk.Label(self, text="⌨ 自定义全局热键",
-                 font=("Microsoft YaHei", 14, "bold"),
+                 font=font(14, "bold"),
                  bg=c["dialog_bg"], fg=c["text"]).pack(pady=(14, 4))
         tk.Label(self, text="直接按下你想要的组合键（例如 Ctrl+Alt+M）",
-                 font=("Microsoft YaHei", 9),
+                 font=font(9),
                  bg=c["dialog_bg"], fg=c["sidebar_muted"]).pack()
 
         self.var = tk.StringVar(value=hotkey.combo_text(self.mod, self.vk))
@@ -1565,7 +1571,7 @@ class HotkeyDialog(tk.Toplevel):
                  pady=8).pack(pady=14)
         self.hint = tk.Label(self, text="等待按键…", bg=c["dialog_bg"],
                              fg=c["sidebar_muted"],
-                             font=("Microsoft YaHei", 9))
+                             font=font(9))
         self.hint.pack()
 
         btns = tk.Frame(self, bg=c["dialog_bg"])
@@ -1686,13 +1692,13 @@ class CountdownPage(BasePage):
             box = tk.Frame(self.body, bg=c["app_bg"])
             box.pack(pady=60)
             tk.Label(box, text="⏳", bg=c["app_bg"], fg=c["text"],
-                     font=("Microsoft YaHei", 34)).pack()
+                     font=font(34)).pack()
             tk.Label(box, text="还没有倒计时", bg=c["app_bg"], fg=c["text"],
-                     font=("Microsoft YaHei", 13, "bold")).pack(pady=(6, 4))
+                     font=font(13, "bold")).pack(pady=(6, 4))
             tk.Label(box, text="点「➕ 新建倒计时」记下第一个重要的日子\n"
                               "（考试、生日、发工资、假期…）",
                      bg=c["app_bg"], fg=c["sidebar_muted"],
-                     font=("Microsoft YaHei", 9), justify="center").pack()
+                     font=font(9), justify="center").pack()
             self.app.update_topbar("暂无倒计时")
             return
 
@@ -1722,16 +1728,16 @@ class CountdownPage(BasePage):
 
         num_color = c["accent"] if info["state"] != "past" else c["sidebar_muted"]
         tk.Label(left, text=self._big_number(info), bg=c["card_bg"],
-                 fg=num_color, font=("Microsoft YaHei", 30, "bold"),
+                 fg=num_color, font=font(30, "bold"),
                  anchor="w").pack(anchor="w")
         tk.Label(left, text=item.get("title", ""), bg=c["card_bg"], fg=c["text"],
-                 font=("Microsoft YaHei", 14, "bold"), anchor="w").pack(anchor="w")
+                 font=font(14, "bold"), anchor="w").pack(anchor="w")
         tk.Label(left, text=self._date_text(item, info), bg=c["card_bg"],
-                 fg=c["sidebar_muted"], font=("Microsoft YaHei", 10),
+                 fg=c["sidebar_muted"], font=font(10),
                  anchor="w").pack(anchor="w", pady=(2, 0))
         if item.get("note"):
             tk.Label(left, text=item["note"], bg=c["card_bg"],
-                     fg=c["sidebar_muted"], font=("Microsoft YaHei", 9),
+                     fg=c["sidebar_muted"], font=font(9),
                      anchor="w").pack(anchor="w")
         self._progress_row(left, item)
         self._actions(card, item, card)
@@ -1748,19 +1754,19 @@ class CountdownPage(BasePage):
         left.pack(side="left", fill="y")
         left.pack_propagate(False)
         tk.Label(left, text=self._big_number(info), bg=c["card_bg"],
-                 fg=num_color, font=("Microsoft YaHei", 22, "bold"),
+                 fg=num_color, font=font(22, "bold"),
                  anchor="center").pack(fill="x")
 
         mid = tk.Frame(card, bg=c["card_bg"])
         mid.pack(side="left", fill="both", expand=True)
         tk.Label(mid, text=item.get("title", ""), bg=c["card_bg"], fg=c["text"],
-                 font=("Microsoft YaHei", 12, "bold"), anchor="w").pack(fill="x")
+                 font=font(12, "bold"), anchor="w").pack(fill="x")
         tk.Label(mid, text=self._date_text(item, info), bg=c["card_bg"],
-                 fg=c["sidebar_muted"], font=("Microsoft YaHei", 9),
+                 fg=c["sidebar_muted"], font=font(9),
                  anchor="w").pack(fill="x")
         if item.get("note"):
             tk.Label(mid, text=item["note"], bg=c["card_bg"],
-                     fg=c["sidebar_muted"], font=("Microsoft YaHei", 9),
+                     fg=c["sidebar_muted"], font=font(9),
                      anchor="w").pack(fill="x")
         self._progress_row(mid, item)
         self._actions(card, item, card)
@@ -1778,7 +1784,7 @@ class CountdownPage(BasePage):
         acts = (("编辑", lambda cid=cid: self._edit(cid)),
                 ("删除", lambda cid=cid: self._delete(cid)))
         for text, cmd in acts:
-            tk.Button(btns, text=text, font=("Microsoft YaHei", 9),
+            tk.Button(btns, text=text, font=font(9),
                       relief="flat", bg=c["panel_bg"], fg=c["text"],
                       activebackground=c["panel_active"], bd=0,
                       padx=10, pady=3, command=cmd).pack(side="left", padx=3)
@@ -1825,7 +1831,7 @@ class CountdownPage(BasePage):
         row.pack(fill="x", pady=(6, 0))
         stat_bar(row, ratio, c, width=260, height=8)
         tk.Label(row, text=f"{ratio * 100:.0f}%", bg=c["card_bg"],
-                 fg=c["sidebar_muted"], font=("Microsoft YaHei", 8)).pack(
+                 fg=c["sidebar_muted"], font=font(8)).pack(
             side="left", padx=8)
 
     # ---- 增删改 ----
@@ -1875,7 +1881,7 @@ class SettingsPage(BasePage):
         self.var = tk.StringVar(value=self.app.theme_name)
         for key in ("light", "dark"):
             tk.Radiobutton(self.body, text=THEME_NAMES[key], value=key,
-                           variable=self.var, font=("Microsoft YaHei", 10),
+                           variable=self.var, font=font(10),
                            bg=c["app_bg"], fg=c["text"],
                            selectcolor=c["panel_bg"],
                            activebackground=c["app_bg"],
@@ -1886,7 +1892,7 @@ class SettingsPage(BasePage):
         chips.pack(anchor="w", pady=8)
         for name, key in (("背景", "app_bg"), ("磁贴", "panel_bg"),
                           ("卡片", "card_bg"), ("强调", "accent")):
-            tk.Label(chips, text=name, width=6, font=("Microsoft YaHei", 8),
+            tk.Label(chips, text=name, width=6, font=font(8),
                      bg=c[key], fg=c["text"], padx=4, pady=6).pack(side="left", padx=3)
 
         self._section("桌面宠物")
@@ -1900,13 +1906,13 @@ class SettingsPage(BasePage):
         tk.Label(pet_row, text="墨墨会悬浮在桌面上：可拖拽抛掷（重力弹跳）、"
                                "点击摸头会开心",
                  bg=c["app_bg"], fg=c["sidebar_muted"],
-                 font=("Microsoft YaHei", 9)).pack(side="left", padx=10)
+                 font=font(9)).pack(side="left", padx=10)
 
         pomo_row = tk.Frame(self.body, bg=c["app_bg"])
         pomo_row.pack(anchor="w", pady=4)
         running = bool(self.app.pomodoro)
         pomo_text = "结束番茄钟" if running else "开始番茄钟"
-        spin_kw = dict(font=("Microsoft YaHei", 10), width=4, justify="center",
+        spin_kw = dict(font=font(10), width=4, justify="center",
                        relief="flat", bd=0, bg=c["panel_bg"], fg=c["text"],
                        buttonbackground=c["panel_bg"],
                        insertbackground=c["text"],
@@ -1920,7 +1926,7 @@ class SettingsPage(BasePage):
                                         textvariable=self.var_pomo, **spin_kw)
             self.spin_pomo.pack(side="left")
             tk.Label(pomo_row, text="分钟", bg=c["app_bg"], fg=c["text"],
-                     font=("Microsoft YaHei", 9)).pack(side="left", padx=(3, 8))
+                     font=font(9)).pack(side="left", padx=(3, 8))
         ModernButton(pomo_row, text=pomo_text, command=self._toggle_pomodoro,
                      c=c, icon="clock", primary=not running).pack(side="left")
         self.var_pomo_break = tk.IntVar(value=self.app.pomo_break)
@@ -1930,14 +1936,14 @@ class SettingsPage(BasePage):
                 textvariable=self.var_pomo_break, **spin_kw)
             self.spin_pomo_break.pack(side="left", padx=(12, 0))
             tk.Label(pomo_row, text="分钟休息", bg=c["app_bg"],
-                     fg=c["text"], font=("Microsoft YaHei", 9)).pack(
+                     fg=c["text"], font=font(9)).pack(
                 side="left", padx=(3, 4))
         tk.Label(pomo_row,
                  text=("专注结束后墨墨会收起倒计时、提醒你休息"
                        if running else
                        "自定义专注时长：开启后墨墨捧书陪你，头顶倒计时"),
                  bg=c["app_bg"], fg=c["sidebar_muted"],
-                 font=("Microsoft YaHei", 9)).pack(side="left", padx=10)
+                 font=font(9)).pack(side="left", padx=10)
 
         monitor_row = tk.Frame(self.body, bg=c["app_bg"])
         monitor_row.pack(anchor="w", pady=4)
@@ -1946,7 +1952,7 @@ class SettingsPage(BasePage):
         tk.Checkbutton(monitor_row, text="系统状态联动（CPU 高冒汗 / "
                                          "内存不足疲惫 / 网速快奔跑）",
                        variable=self._monitor_var, command=self._toggle_monitor,
-                       font=("Microsoft YaHei", 9),
+                       font=font(9),
                        bg=c["app_bg"], fg=c["text"],
                        selectcolor=c["panel_bg"],
                        activebackground=c["app_bg"],
@@ -1960,7 +1966,7 @@ class SettingsPage(BasePage):
             value=bool(self.app.cfg.get_setting("hotkey_enabled", True)))
         tk.Checkbutton(hk_top, text="启用全局热键（窗口隐藏时也能一键呼出）",
                        variable=self._hk_var, command=self._toggle_hotkey,
-                       font=("Microsoft YaHei", 9),
+                       font=font(9),
                        bg=c["app_bg"], fg=c["text"],
                        selectcolor=c["panel_bg"],
                        activebackground=c["app_bg"],
@@ -1970,9 +1976,9 @@ class SettingsPage(BasePage):
         hk_row = tk.Frame(self.body, bg=c["app_bg"])
         hk_row.pack(anchor="w", pady=4)
         tk.Label(hk_row, text="当前：", bg=c["app_bg"], fg=c["sidebar_muted"],
-                 font=("Microsoft YaHei", 9)).pack(side="left")
+                 font=font(9)).pack(side="left")
         tk.Label(hk_row, text=self.app.hotkey_text(), bg=c["app_bg"],
-                 fg=c["accent"], font=("Microsoft YaHei", 10, "bold")).pack(
+                 fg=c["accent"], font=font(10, "bold")).pack(
             side="left", padx=(0, 10))
         ModernButton(hk_row, text="修改快捷键", command=self._pick_hotkey,
                      c=c, icon="gear", primary=True).pack(side="left",
@@ -1988,7 +1994,7 @@ class SettingsPage(BasePage):
         elif not self._hk_var.get():
             state = "已关闭：只能通过任务栏图标打开主界面"
         tk.Label(self.body, text=state, bg=c["app_bg"], fg=c["sidebar_muted"],
-                 font=("Microsoft YaHei", 9), anchor="w",
+                 font=font(9), anchor="w",
                  justify="left").pack(fill="x", pady=(2, 0))
 
         self._section("侧边栏")
@@ -1998,14 +2004,14 @@ class SettingsPage(BasePage):
                      c=c, icon="collapse").pack(side="left")
         tk.Label(sb_row, text="折叠后只显示图标，状态会自动记住",
                  bg=c["app_bg"], fg=c["sidebar_muted"],
-                 font=("Microsoft YaHei", 9)).pack(side="left", padx=10)
+                 font=font(9)).pack(side="left", padx=10)
 
         self._section("关于")
         tk.Label(self.body,
                  text=f"墨墨桌面管理助手 {APP_VERSION}\n"
                       "纯 Python 标准库实现（tkinter），无需任何第三方依赖。",
                  bg=c["app_bg"], fg=c["sidebar_muted"],
-                 font=("Microsoft YaHei", 9), justify="left",
+                 font=font(9), justify="left",
                  anchor="w").pack(anchor="w")
 
         self.app.update_topbar(f"当前主题：{THEME_NAMES[self.app.theme_name]}")
@@ -2013,7 +2019,7 @@ class SettingsPage(BasePage):
     def _section(self, text):
         c = self.C
         tk.Label(self.body, text=text, bg=c["app_bg"], fg=c["text"],
-                 font=("Microsoft YaHei", 11, "bold"), anchor="w").pack(
+                 font=font(11, "bold"), anchor="w").pack(
             fill="x", pady=(14, 4))
         hline(self.body, c["divider"], pady=(0, 8))
 
@@ -2029,7 +2035,7 @@ class SettingsPage(BasePage):
                 mins, rest = self.app.pomo_minutes, self.app.pomo_break
             self.app.set_pomo_minutes(mins, rest)
             self.app.start_pomodoro(mins, rest)
-        self.app._show_page("settings")   # 重建页面以更新按钮文字
+        self.app._show_page("settings", force=True)   # 重建页面以更新按钮文字
 
     def _pick_hotkey(self):
         """弹出捕获框：按下组合键即可自定义全局热键。"""
@@ -2039,7 +2045,7 @@ class SettingsPage(BasePage):
         self.app.cfg.set_setting("hotkey_mod", int(mod or 0))
         self.app.cfg.set_setting("hotkey_vk", int(vk or 0))
         self.app.reload_hotkey()
-        self.app._show_page("settings")
+        self.app._show_page("settings", force=True)
 
     def _reset_hotkey(self):
         # 清掉自定义值，让它回到默认（如果被占用会自动换备用组合）
@@ -2047,12 +2053,12 @@ class SettingsPage(BasePage):
         self.app.cfg.settings.pop("hotkey_vk", None)
         self.app.cfg.save()
         self.app.reload_hotkey()
-        self.app._show_page("settings")
+        self.app._show_page("settings", force=True)
 
     def _toggle_hotkey(self):
         self.app.cfg.set_setting("hotkey_enabled", self._hk_var.get())
         self.app.reload_hotkey()
-        self.app._show_page("settings")
+        self.app._show_page("settings", force=True)
 
     def _toggle_monitor(self):
         self.app.cfg.set_setting("pet_monitor", self._monitor_var.get())

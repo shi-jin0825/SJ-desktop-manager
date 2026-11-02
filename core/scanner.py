@@ -59,11 +59,7 @@ def scan_desktop() -> list:
     """
     items = []
     for desktop in get_desktop_paths():
-        seen_here = set()
         for entry in os.scandir(desktop):
-            if entry.name in seen_here:
-                continue
-            seen_here.add(entry.name)
             if _is_hidden(entry.path):
                 continue
             if entry.name.lower().endswith((".lnk", ".url")):

@@ -156,13 +156,16 @@ SJ-desktop-manager/
 │   ├── icons.py           # 系统图标提取（Shell COM + 纯标准库 PNG 编码 + LRU 缓存）
 │   ├── sysinfo.py         # 系统监控采集（CPU/内存/网速，ctypes 直调 Win32）
 │   ├── hotkey.py          # 全局热键（RegisterHotKey + WM_HOTKEY 过滤轮询）
-│   └── dpi.py             # 高 DPI 感知声明
+│   ├── dpi.py             # 高 DPI 感知声明
+│   └── undo.py            # 多步撤销栈（纯逻辑，不依赖 tkinter）
 ├── gui/
 │   ├── app.py             # 主框架：侧边栏 + 页面路由（页面实例缓存）
 │   ├── pages.py           # 六个页面：首页 / 分类 / 统计 / 监控 / 倒计时 / 设置
 │   ├── widgets.py         # 通用控件（胶囊渐变按钮、圆角搜索框、图标缩放…）
 │   ├── navicons.py        # 自制统一线性图标（24×24 Canvas 矢量绘制）
 │   ├── theme.py           # 浅色 / 深色主题配色表
+│   ├── fonts.py           # 字体常量 + 缺失回退（无微软雅黑时自动降级）
+│   ├── category_ops.py    # 分类 新建/重命名/删除 的公共层（三处共用）
 │   └── pet.py             # 桌面悬浮宠物（物理引擎 / 系统联动 / 番茄钟）
 ├── tools/
 │   ├── build_exe.py       # PyInstaller 一键打包成 exe
@@ -170,7 +173,8 @@ SJ-desktop-manager/
 │   ├── mascot_to_ico.py   # 吉祥物图 -> 应用 .ico
 │   └── make_shortcut.py   # 创建/更新桌面快捷方式
 ├── tests/
-│   └── test_core.py       # core 层单测（倒计时 / 配置，19 个用例）
+│   ├── test_core.py       # core 层单测（倒计时 / 配置 / 撤销栈 / 图标缓存 key）
+│   └── test_gui.py        # gui 层单测（字体解析 / 胶囊按钮，30 个用例合计）
 ├── assets/                # 图标、吉祥物图与截图
 └── config.json            # 首次运行自动生成（已在 .gitignore 中）
 ```
@@ -181,15 +185,63 @@ SJ-desktop-manager/
 python -m unittest discover -s tests -v
 ```
 
-覆盖 `core.countdown`（日期解析、闰年循环 2/29→2/28、进度区间）与
-`core.config`（原子写 / 备份 / 损坏恢复 / 路径 key 迁移 / 失效清理 / 批量归类）
-这两块有边界逻辑的纯逻辑模块。
+覆盖：
+
+* `core.countdown`（日期解析、闰年循环 2/29→2/28、进度区间）
+* `core.config`（原子写 / 备份 / 损坏恢复 / 路径 key 迁移 / 失效清理 / 批量归类）
+* `core.undo`（批量操作不被单项覆盖、深度封顶、按分类归并还原）
+* `core.icons`（缓存 key 的斜杠 / 大小写变体归一）
+* `gui.fonts` 与胶囊按钮（无 tkinter 的环境自动跳过）
 
 ## 许可
 
 MIT，见 [LICENSE](LICENSE)。
 
 ## 更新日志
+
+### v1.4 — 修掉新代码引入的缺陷 + 抽公共层（v1.4）
+
+**P1 新代码引入的真实缺陷**
+
+- **桌宠不再"静默死亡"**：`_tick` / `_monitor_tick` 的 `self.after(...)`
+  原来排在 `try` 块内，而只捕 `tk.TclError`。`_sample()` 里 `pomo["minutes"]`
+  是裸索引，一旦缺键（或任何非 `TclError` 异常）下一帧就不会再被排队 ——
+  桌宠当场定格且控制台一声不吭。现在调度移到 `try` 之外，异常打印堆栈后
+  动画继续跑；番茄钟字段全部改用 `.get()` 兜底
+- **撤销不再被单项操作吃掉**：`_last_op` 单个快照改成 `core/undo.py` 的多步
+  撤销栈（深度 10）。「批量移一批 → 右键再动一项 → 撤销」现在能连续回退，
+  批量记录不会被覆盖；操作条在没有选中项但还有可撤销步骤时也保持可见，
+  否则批量整理完就找不到撤销按钮了
+- **选中计数不再虚高**：右键单项移入 / 移出后会把该项移出选中集
+- **搜索 + Shift 连选不会选到看不见的项**：区间改成在「当前过滤后可见」
+  的项里计算，不再用未过滤的全量列表
+
+**P2 遗留与打磨**
+
+- **"不再静默"补齐最后一环**：`load_status`（recovered / reset）此前只有
+  数据层记录、`app.py` 没人读它。现在首次启动会明确弹一次提示，说明
+  配置是从备份恢复的还是被重置的、原件留在哪儿
+- **页面缓存下的刷新**：`refresh_pomodoro_ui()` 与设置页的番茄钟 / 宠物 /
+  热键操作改成 `force=True` 重建，按钮文案不再停留在旧状态
+  （页面缓存后不带 force 只是把旧实例重新 pack 出来）
+- **分类 CRUD 抽公共层**：新建 / 重命名 / 删除三份复制粘贴收敛到
+  `gui/category_ops.py`，三处调用方（首页工具栏、分类管理器弹窗、分类页）
+  共用同一套判空与提示
+- **字体常量**：`"Microsoft YaHei"` 曾硬编码 95 次，现在统一走
+  `gui/fonts.py` 的 `font(size, ...)`，并在系统字体表里按优先级挑选，
+  没有微软雅黑时自动降级（PingFang / Noto Sans CJK / 文泉驿 / SimHei…），
+  不会再因为缺字体把中文显示成方块
+- **搜索 / 重排不再白扫桌面**：`refresh()` 触发点显式传 `rescan=False`
+  （搜索过滤、窗口换列、归类增删改都不需要重扫）
+- **桌宠小项**：`set_speed` 不再改模块级全局（改实例属性）；疲惫状态只压低
+  幅度，不会把用户选的「静止」档强行改活；奔跑速度复用 1.2 秒一次的系统
+  采样，不再 60fps 每帧调 `net_speed()`；右键菜单不再写死 `entryconfig(0)`
+- **清扫死代码**：`scanner.seen_here`（`scandir` 单目录不会返回重名）移除；
+  `icons` 缓存 key 改用 `normcase`（与配置层 `item_key` 一致），
+  斜杠 / 反斜杠写法不再产生重复缓存条目
+- **测试**：新增 `core/undo`、`core.icons` 缓存 key 用例，以及
+  `tests/test_gui.py`（字体解析、胶囊按钮不含独立 oval 图元）；
+  共 30 个用例，无 tkinter 的环境自动跳过 GUI 部分
 
 ### v1.3 — 数据安全与工程化（原子写 / 备份 / 分发 / 归类鲁棒性）
 
@@ -398,6 +450,12 @@ MIT，见 [LICENSE](LICENSE)。
 - [x] 倒数日提醒（专属倒计时）
 - [ ] 倒计时到期桌面通知
 - [ ] 开机自启动
+- [ ] 单实例锁（重复启动让第二个实例直接聚焦已有窗口，而不是热键降级）
+- [ ] 记住窗口位置与大小
+- [ ] 系统托盘图标（热键隐藏后仍有常驻入口）
+- [ ] 排序选项（文件夹优先 / 按类型 / 按时间，现在只有按名称）
+- [ ] 按扩展名自动归类规则（如 `*.lnk` 自动进「工具」）
+- [x] GitHub Actions 跑 `unittest`（`.github/workflows/tests.yml`）
 
 ## License
 

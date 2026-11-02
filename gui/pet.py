@@ -25,10 +25,13 @@ import math
 import os
 import struct
 import time
+import traceback
 import zlib
 from ctypes import wintypes
 
 import tkinter as tk
+
+from gui.fonts import font
 
 # ==========================================================================
 #  可调参数
@@ -377,7 +380,7 @@ class Bubble(tk.Toplevel):
         c = self._c
         self._cv.delete("all")
         probe = self._cv.create_text(0, 0, text=text, anchor="nw",
-                                     font=("Microsoft YaHei", 9), fill=c["text"])
+                                     font=font(9), fill=c["text"])
         bx0, by0, bx1, by1 = self._cv.bbox(probe)
         self._cv.delete(probe)
         tw, th = bx1 - bx0, by1 - by0
@@ -390,7 +393,7 @@ class Bubble(tk.Toplevel):
         self._round_rect(self._cv, x0, y0, x1, y1, 10,
                          fill=c["bubble_bg"], outline=c["bubble_outline"])
         self._cv.create_text((x0 + x1) / 2, (y0 + y1) / 2, text=text,
-                             font=("Microsoft YaHei", 9), fill=c["text"],
+                             font=font(9), fill=c["text"],
                              justify="center")
         cx = self._pet._win_w // 2 + 10          # 尾巴对准章鱼头顶
         self._cv.create_polygon(cx - 7, y1 - 1, cx + 7, y1 - 1, cx, y1 + self.TAIL,
@@ -503,8 +506,12 @@ class DesktopPet(tk.Toplevel):
         self._monitor_on = cfg.get_setting("pet_monitor", True) if cfg else True
         self._physics_on = cfg.get_setting("pet_physics", True) if cfg else True
         self._sys_state = "idle"
+        self._net_down = 0.0          # 最近一次采到的下载速度（字节/秒）
 
         # 上次选的浮动节奏（慢悠悠 / 悠闲 / 轻快 / 静止）
+        # 浮动参数放在实例上：早先 set_speed 改的是模块级全局，会污染下一次召唤
+        self._float_period = FLOAT_PERIOD
+        self._float_amp = FLOAT_AMPLITUDE
         if cfg is not None:
             try:
                 period = float(cfg.get_setting("pet_float_period", FLOAT_PERIOD))
@@ -528,14 +535,32 @@ class DesktopPet(tk.Toplevel):
         self._monitor_tick()
 
     # ============================ 帧循环 ============================
+    # 两条循环链的调度都放在 try 之外：任何非 TclError 的异常（KeyError、
+    # TypeError…）都不能让下一帧不再被排队，否则桌宠会当场定格、控制台一声
+    # 不吭 —— 这是最难排查的一类"静默死亡"。
     def _tick(self):
         if not self._alive:
             return
         try:
             self._step()
-            self.after(max(8, int(1000 / FPS)), self._tick)
+        except tk.TclError:
+            self._alive = False          # 窗口已销毁，正常收摊
+            return
+        except Exception:
+            traceback.print_exc()        # 其它异常：打出来，动画继续跑
+        self.after(max(8, int(1000 / FPS)), self._tick)
+
+    def _monitor_tick(self):
+        if not self._alive:
+            return
+        try:
+            self._sample()
         except tk.TclError:
             self._alive = False
+            return
+        except Exception:
+            traceback.print_exc()
+        self.after(int(MONITOR_PERIOD_S * 1000), self._monitor_tick)
 
     def _step(self):
         """一帧物理。
@@ -569,9 +594,12 @@ class DesktopPet(tk.Toplevel):
             return
 
         if self._mode == "float":
-            amp = 3 if self._face == "tired" else FLOAT_AMPLITUDE   # 疲惫时没力气
-            if amp > 0 and FLOAT_PERIOD > 0:
-                phase = ((now - self._start) / FLOAT_PERIOD) * 2.0 * math.pi
+            amp = self._float_amp
+            if self._face == "tired":
+                # 疲惫时没力气：只压低幅度，不再把用户选的「静止」档强行改活
+                amp = min(amp, 3)
+            if amp > 0 and self._float_period > 0:
+                phase = ((now - self._start) / self._float_period) * 2.0 * math.pi
                 self.y = self._base_y - amp * math.sin(phase)
             if self._face == "run":
                 self._run_step(dt)
@@ -607,15 +635,14 @@ class DesktopPet(tk.Toplevel):
             self._bubble.follow(gx, gy)
 
     def _run_step(self, dt):
-        """奔跑：横向往返，速度随网速加快。"""
+        """奔跑：横向往返，速度随网速加快。
+
+        网速不再在这里现采 —— 60fps 下每帧一次 GetIfTable2 既没意义又费
+        CPU，直接复用 _measure() 每个监控节拍（1.2s）刷新的 self._net_down。
+        """
         speed = NET_RUN_SPEED
-        try:
-            from core import sysinfo
-            sp = sysinfo.net_speed()
-            if sp:
-                speed = NET_RUN_SPEED * (0.6 + min(3.0, sp[0] / NET_FAST))
-        except Exception:
-            pass
+        if self._net_down > 0:
+            speed = NET_RUN_SPEED * (0.6 + min(3.0, self._net_down / NET_FAST))
         self.x += self._run_dir * speed * dt
         if self.x <= MARGIN_X:
             self.x, self._run_dir = MARGIN_X, 1
@@ -679,6 +706,8 @@ class DesktopPet(tk.Toplevel):
         except tk.TclError:
             self._alive = False
             return
+        except Exception:
+            traceback.print_exc()
         self.after(int(MONITOR_PERIOD_S * 1000), self._monitor_tick)
 
     def _sample(self):
@@ -706,14 +735,19 @@ class DesktopPet(tk.Toplevel):
             return                        # 开心 / 害羞等一次性表情还在播放
 
         if pomo:
-            m, s = divmod(max(0, int(pomo["end"] - time.time())), 60)
-            self._bubble.say(f"📚 番茄钟 {pomo['minutes']} 分钟\n"
+            # pomo 是主窗口塞进来的 dict，字段缺失时给个兜底值 —— 早先这里
+            # 是裸索引 pomo["minutes"]，缺键就抛 KeyError，采样链当场断掉。
+            left = max(0, int(pomo.get("end", 0) - time.time()))
+            m, s = divmod(left, 60)
+            mins = pomo.get("minutes") or self._pomo_minutes()
+            self._bubble.say(f"📚 番茄钟 {mins} 分钟\n"
                              f"还剩 {m:02d}:{s:02d}，我陪你学习", 0)
             self._set_face("study")
             self._pomo_showing = True
             return
 
         if not self._monitor_on:
+            self._net_down = 0.0
             self._bubble.hide()
             self._set_face("idle")
             return
@@ -737,7 +771,10 @@ class DesktopPet(tk.Toplevel):
             sp = sysinfo.net_speed()
             down = sp[0] if sp else 0.0
         except Exception:
+            down = 0.0
+            self._net_down = down
             return "idle", None
+        self._net_down = down
         if cpu >= CPU_HOT:
             return "hot", (f"🥵 CPU {cpu:.0f}%，好热呀…\n（吐舌头散热中）")
         if load >= MEM_TIRED:
@@ -752,6 +789,18 @@ class DesktopPet(tk.Toplevel):
         if p and time.time() < p.get("end", 0):
             return p
         return None
+
+    def _pomo_minutes(self) -> int:
+        """气泡里显示的专注时长：以主窗口记录的为准，拿不到就用默认设置。"""
+        p = getattr(self._master, "pomodoro", None)
+        for val in (p.get("minutes") if isinstance(p, dict) else None,
+                    getattr(self._master, "pomo_minutes", None)):
+            try:
+                if val:
+                    return int(val)
+            except (TypeError, ValueError):
+                continue
+        return 45
 
     def _start_pomodoro(self):
         """按用户设置的默认时长开始（右键菜单）。"""
@@ -862,6 +911,9 @@ class DesktopPet(tk.Toplevel):
         self._menu = tk.Menu(self, tearoff=0)
         self._menu.add_command(label="🍅 开始番茄钟",
                                command=self._start_pomodoro)
+        # 记下番茄钟那一项的位置：右键时要按当前状态改写它的文字
+        # （早先写死 entryconfig(0)，菜单一加项就会改错地方）
+        self._pomo_item = self._menu.index("end")
         self._menu.add_command(label="⏱ 自定义番茄钟时长…",
                                command=self._custom_pomodoro)
         self._menu.add_command(label="⏹ 结束番茄钟",
@@ -891,8 +943,9 @@ class DesktopPet(tk.Toplevel):
         try:
             mins = getattr(self._master, "pomo_minutes", 45)
             running = bool(getattr(self._master, "pomodoro", None))
-            self._menu.entryconfig(0, label=("⏹ 番茄钟进行中…" if running
-                                             else f"🍅 开始番茄钟（{mins} 分钟）"))
+            self._menu.entryconfig(self._pomo_item,
+                                   label=("⏹ 番茄钟进行中…" if running
+                                          else f"🍅 开始番茄钟（{mins} 分钟）"))
         except (tk.TclError, AttributeError):
             pass
         self._menu.tk_popup(e.x_root, e.y_root)
@@ -918,9 +971,12 @@ class DesktopPet(tk.Toplevel):
         """运行时改浮动速度：period 越大越慢，amplitude 是上下各多少像素。
 
         remember=True 时写进 config.json，下次召唤墨墨还是这个节奏。
+
+        参数存在实例上（早先写的是模块级全局，会带到下一次召唤，而且两个
+        墨墨会互相干扰）。
         """
-        global FLOAT_PERIOD, FLOAT_AMPLITUDE
-        FLOAT_PERIOD, FLOAT_AMPLITUDE = period, amplitude
+        self._float_period = float(period)
+        self._float_amp = float(amplitude)
         self._start = time.monotonic()
         if remember:
             self._cfg_set("pet_float_period", period)

@@ -14,6 +14,7 @@ from tkinter import font as tkfont
 from tkinter import messagebox
 
 from gui.navicons import ICONS, IconLabel, draw_icon
+from gui import fonts
 
 
 # ---- 颜色小工具（渐变按钮用）----
@@ -145,7 +146,7 @@ class ModernButton(tk.Canvas):
     看起来更接近现代 App；行为（hover / 点击）与 tk.Button 一致。
     """
 
-    FONT = ("Microsoft YaHei", 10)
+    FONT_SIZE = 10      # 字体族由 gui/fonts 在运行时解析（不在 import 时定死）
     ICON_GAP = 7
 
     def __init__(self, master, text="", command=None, c=None, primary=False,
@@ -158,7 +159,7 @@ class ModernButton(tk.Canvas):
         self.icon = icon if icon in ICONS else None
         self.icon_size = icon_size
         self.padx = padx
-        self.font = tuple(font or self.FONT)
+        self.font = tuple(font or fonts.font(self.FONT_SIZE))
         self._hover = False
         self._pressed = False
         self._enabled = True
@@ -364,7 +365,7 @@ class RoundedEntry(tk.Canvas):
                               bg=bg, fg=c.get("text", "#333333"),
                               insertbackground=c.get("text", "#333333"),
                               highlightthickness=0,
-                              font=("Microsoft YaHei", 10),
+                              font=fonts.font(10),
                               selectbackground=c.get("accent", "#4b6bfb"),
                               selectforeground=c.get("accent_fg", "#ffffff"))
         self.ic = IconLabel(self, icon, 16, c.get("nav_icon", "#5a6478"), bg=bg)
