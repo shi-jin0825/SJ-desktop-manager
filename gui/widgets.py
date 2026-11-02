@@ -467,16 +467,32 @@ def hline(parent, color, padx=0, pady=6):
     return f
 
 
-def stat_bar(parent, ratio, c: dict, width=220, height=10, side="left"):
-    """统计占比条：底槽 + 按 ratio 填充的彩色条（自动 pack 到 parent）。"""
+def stat_bar(parent, ratio, c: dict, width=220, height=10, side="left",
+             stretch=False):
+    """统计占比条：底槽 + 按 ratio 填充的彩色条（自动 pack 到 parent）。
+
+    stretch=True 时横向占满剩余空间：窗口拉大，占比条也跟着变长
+    （固定宽度的话，大窗口上会缩在左边一小段，显得内容没跟着放大）。
+    """
     wrap = tk.Frame(parent, bg=c["stat_bar_bg"], width=width, height=height)
-    wrap.pack(side=side, padx=4)
+    wrap.pack(side=side, padx=4, fill="x" if stretch else "",
+              expand=bool(stretch))
     wrap.pack_propagate(False)
     cv = tk.Canvas(wrap, width=width, height=height, bg=c["stat_bar_bg"],
                    highlightthickness=0, bd=0)
-    cv.pack()
+    cv.pack(fill="both" if stretch else "", expand=bool(stretch))
     r = 0.0 if ratio <= 0 else (1.0 if ratio >= 1 else ratio)
-    if r > 0:
-        cv.create_rectangle(0, 0, max(2, int(width * r)), height,
+
+    def paint(px=None):
+        cv.delete("all")
+        if r <= 0:
+            return
+        w = int(px or cv.winfo_width() or width)
+        cv.create_rectangle(0, 0, max(2, int(w * r)), height,
                             fill=c["stat_bar"], outline="")
+
+    if stretch:
+        cv.bind("<Configure>", lambda e: paint(e.width))
+    else:
+        paint(width)
     return wrap

@@ -23,17 +23,31 @@ from gui.widgets import (open_target, make_photo, rounded_rect, short_name,
                          center_window, hline, stat_bar, shrink,
                          ModernButton, hover_card)
 
-# ---- 磁贴尺寸 ----
-TILE_SIZE = 96      # 单元格宽度（px）
-TILE_H = 108        # 单元格高度（px）（磁贴统一尺寸，hover 放大不会推挤邻居）
+# ---- 磁贴尺寸（基准值；网格变宽时整体按倍率放大） ----
+TILE_SIZE = 96      # 磁贴基准宽度（px）
+TILE_H = 108        # 磁贴基准高度（px）（磁贴统一尺寸，hover 放大不会推挤邻居）
 COLS = 8            # 默认每行数量（窗口宽度变化时会自适应）
 MIN_COLS = 4        # 每行最少数量
 MAX_COLS = 16       # 每行最多数量（窗口放大时自动增加）
 TILE_PADX = 8
 TILE_PADY = 8
-ICON_SIZE = 48      # 磁贴图标尺寸（px）
+ICON_SIZE = 48      # 磁贴图标基准尺寸（px）
 ICONS_PER_TICK = 6  # 每帧最多提取几个系统图标（懒加载，防止首屏卡顿）
 TILE_HOVER = 6      # 鼠标悬停时磁贴放大的像素数
+
+# 自适应缩放：窗口放大时磁贴跟着长大（以前只加列数，磁贴永远 96px）
+REF_GRID_W = 640        # 基准网格宽度：这个宽度下磁贴正好是基准尺寸
+TILE_SCALE_POW = 0.75   # 宽度→倍率曲线：1.0=完全线性，越小越偏向「多排几列」
+TILE_GROW = 1.75        # 磁贴最大放大倍率（顶到上限后就只加列、不再变大）
+TILE_SHRINK = 0.85      # 窗口很窄时磁贴的最小倍率
+TILE_PRESETS = {"small": 84, "normal": 100, "large": 132}   # 手动档位（px）
+
+# ---- 分类文件夹窗口内的卡片 ----
+CAT_TILE_W = 90         # 卡片基准宽度（px）
+CAT_TILE_H = 86         # 卡片基准高度（px）
+CAT_COLS = 8            # 基准列数
+CAT_MIN_COLS = 3
+CAT_MAX_COLS = 12
 
 # ---- 分类文件夹 3×3 预览 ----
 FOLDER_PREVIEW = 70
@@ -57,19 +71,60 @@ class CategoryWindow(tk.Toplevel):
         c = theme or get_theme(DEFAULT_THEME)
         self.C = c
         self.title(f"📁 {category}")
-        center_window(self, 560, 400, master)
         self.configure(bg=c["dialog_bg"])
         self.category = category
         self.cfg = config
         self.on_change = on_change
         self._photos = []
         self.items = list(items)
+        self.cols = CAT_COLS
+        self.tile_w = CAT_TILE_W
+        self.tile_h = CAT_TILE_H
+        self._relayout_job = None
+        # 窗口大小跟着主窗口：主窗口放大后这个窗口还是小窗口那点尺寸会很突兀
+        mw = mh = 0
+        try:
+            if master is not None and master.winfo_ismapped():
+                mw, mh = master.winfo_width(), master.winfo_height()
+        except tk.TclError:
+            pass
+        center_window(self,
+                      max(560, min(1100, int(mw * 0.72) if mw else 560)),
+                      max(400, min(820, int(mh * 0.78) if mh else 400)),
+                      master)
 
         self.head = tk.Label(self, text="", font=font(14, "bold"),
                              bg=c["dialog_bg"], fg=c["text"])
         self.head.pack(pady=10)
         self.frame = tk.Frame(self, bg=c["dialog_bg"])
         self.frame.pack(fill="both", expand=True, padx=10, pady=5)
+        self.frame.bind("<Configure>", self._on_resize)
+        self._render()
+
+    def _on_resize(self, event=None):
+        """分类窗口被拉大：内容跟着重排（列数 + 卡片尺寸），不再固定 8 列。"""
+        w = event.width if event is not None and event.width > 1 \
+            else self.frame.winfo_width()
+        if w <= 1:
+            return
+        cols, tile_w = self._plan(w)
+        if cols == self.cols and tile_w == self.tile_w:
+            return
+        self.cols, self.tile_w = cols, tile_w
+        self.tile_h = int(round(CAT_TILE_H * tile_w / float(CAT_TILE_W)))
+        if self._relayout_job is not None:
+            self.after_cancel(self._relayout_job)
+        self._relayout_job = self.after(150, self._do_relayout)
+
+    @staticmethod
+    def _plan(width):
+        per = CAT_TILE_W + 12
+        cols = max(CAT_MIN_COLS, min(CAT_MAX_COLS, width // per))
+        s = max(1.0, min(1.4, width / 560.0))
+        return cols, int(CAT_TILE_W * s)
+
+    def _do_relayout(self):
+        self._relayout_job = None
         self._render()
 
     def _render(self):
@@ -80,32 +135,39 @@ class CategoryWindow(tk.Toplevel):
         self._photos = []
         items = self.items
         self.head.config(text=f"📁 {self.category}（{len(items)} 项）")
-        self.frame.grid_columnconfigure(tuple(range(COLS)), weight=1)
+        cols = self.cols
+        icon_size = max(32, int(round(ICON_SIZE * self.tile_w / float(CAT_TILE_W)
+                                      / 2.0)) * 2)
+        fs = max(8, min(12, int(round(9 * self.tile_w / float(CAT_TILE_W)))))
+        self.frame.grid_columnconfigure(tuple(range(cols)), weight=1)
 
         if not items:
             tk.Label(self.frame, text="空空如也，右键桌面上的项目可移入此分类",
                      bg=c["dialog_bg"], fg=c["text_muted"]).grid(
-                row=0, column=0, columnspan=COLS, pady=40)
+                row=0, column=0, columnspan=cols, pady=40)
             return
 
         for idx, item in enumerate(items):
-            icon = make_photo(icon_png(item.path, ICON_SIZE), self._photos)
+            icon = make_photo(icon_png(item.path, icon_size), self._photos)
             if icon:
                 btn = tk.Button(self.frame, image=icon,
                                 text=short_name(item.display_name),
-                                compound="top", font=font(9),
-                                width=90, height=86, relief="flat",
+                                compound="top", font=font(fs),
+                                width=self.tile_w, height=self.tile_h,
+                                relief="flat",
                                 bg=c["panel_bg"], fg=c["text"],
                                 activebackground=c["panel_active"],
                                 command=lambda p=item.path: open_target(p))
             else:
                 btn = tk.Button(self.frame, text=f"📄\n{short_name(item.display_name)}",
-                                font=font(9),
-                                width=10, height=4, relief="flat",
+                                font=font(fs),
+                                width=max(8, self.tile_w // 9),
+                                height=max(3, int(round(self.tile_h / 22.0))),
+                                relief="flat",
                                 bg=c["panel_bg"], fg=c["text"],
                                 activebackground=c["panel_active"],
                                 command=lambda p=item.path: open_target(p))
-            btn.grid(row=idx // COLS, column=idx % COLS, padx=6, pady=6)
+            btn.grid(row=idx // cols, column=idx % cols, padx=6, pady=6)
             menu = tk.Menu(btn, tearoff=0)
             menu.add_command(label="打开", command=lambda p=item.path: open_target(p))
             menu.add_command(label="移出分类",
@@ -186,6 +248,17 @@ class DesktopPage(BasePage):
         self._cols_cfg = 0
         self._relayout_job = None
         self._scrollable = False
+        # 当前这一轮渲染实际用的尺寸（随网格宽度缩放，见 _apply_metrics）
+        self.tile_w = TILE_SIZE
+        self.tile_h = TILE_H
+        self.icon_size = ICON_SIZE
+        self.tile_hover = TILE_HOVER
+        self.preview = FOLDER_PREVIEW
+        self.preview_icon = PREVIEW_ICON
+        self.preview_gap = PREVIEW_GAP
+        self.preview_pad = PREVIEW_PAD
+        self.preview_r = 12
+        self.tile_font = 9
         self.selected = set()      # 多选：存桌面项路径
         self._anchor = None        # Shift 连选的起点
         self._undo_stack = UndoStack(UNDO_DEPTH)   # 最近几步整理（可连续撤销）
@@ -415,20 +488,60 @@ class DesktopPage(BasePage):
         if w <= 1:
             return
         self.canvas.itemconfigure(self._grid_win, width=w)
-        cols = self._cols_for_width(w)
-        if cols != self.cols:
+        cols, tile_w = self._plan(w)
+        # 列数或磁贴尺寸变了才重排：拖动窗口时每次像素变化都重建网格会卡
+        if cols != self.cols or tile_w != self.tile_w:
             self.cols = cols
+            self._apply_metrics(tile_w)
             if self._relayout_job is not None:
                 self.after_cancel(self._relayout_job)
             self._relayout_job = self.after(150, self._do_relayout)
 
     def _do_relayout(self):
         self._relayout_job = None
-        self.refresh(rescan=False)      # 只是换列数，桌面内容没变，不用重扫
+        self.refresh(rescan=False)      # 只是换列数/尺寸，桌面内容没变，不用重扫
 
-    def _cols_for_width(self, width: int) -> int:
-        per = TILE_SIZE + TILE_PADX * 2 + 4
-        return max(MIN_COLS, min(MAX_COLS, width // per))
+    def _plan(self, width):
+        """按网格可用宽度算 (每行几列, 磁贴宽度)。
+
+        窗口放大时磁贴要跟着长大，而不是只多排几列、磁贴还是小窗口那点尺寸：
+          1. 先按宽度算放大倍率（宽度比的 0.75 次方，大屏上不至于夸张）——
+             磁贴尺寸只跟宽度有关，所以拖动窗口时它是单调变大的；
+          2. 再按这个尺寸算能排几列，多余宽度由 grid 均分成磁贴间的均匀间距，
+             不会挤在右边留一大块空白；
+          3. 间距大到看着太散时才多加一列（列数变了磁贴尺寸不变，
+             所以不会出现「窗口拉宽、磁贴反而变小」的回落）。
+        """
+        pad = TILE_PADX * 2 + 4
+        avail = max(MIN_COLS * (TILE_SIZE + TILE_PADX * 2), width - 4)
+        preset = str(self.cfg.get_setting("tile_size", "auto") or "auto").lower()
+        if preset in TILE_PRESETS:
+            # 手动档位：尺寸定死，只按宽度决定排几列
+            tile_w = TILE_PRESETS[preset]
+        else:
+            s = (avail / float(REF_GRID_W)) ** TILE_SCALE_POW
+            s = max(TILE_SHRINK, min(TILE_GROW, s))
+            tile_w = int(round(TILE_SIZE * s))
+        tile_w = int(min(TILE_SIZE * TILE_GROW,
+                         max(TILE_SIZE * TILE_SHRINK, tile_w)))
+        cols = max(MIN_COLS, min(MAX_COLS, avail // (tile_w + pad)))
+        while cols < MAX_COLS and avail // cols - pad > int(tile_w * 1.3):
+            cols += 1
+        return cols, tile_w
+
+    def _apply_metrics(self, tile_w):
+        """磁贴宽定了，图标 / 预览 / 字号等比跟着变。"""
+        s = tile_w / float(TILE_SIZE)
+        self.tile_w = tile_w
+        self.tile_h = int(round(TILE_H * s))
+        self.icon_size = max(24, int(round(ICON_SIZE * s / 2.0)) * 2)
+        self.tile_hover = max(4, int(round(TILE_HOVER * s)))
+        self.preview = int(round(FOLDER_PREVIEW * s))
+        self.preview_icon = max(8, int(round(PREVIEW_ICON * s)))
+        self.preview_gap = max(1, int(round(PREVIEW_GAP * s)))
+        self.preview_pad = max(2, int(round(PREVIEW_PAD * s)))
+        self.preview_r = max(8, int(round(12 * s)))
+        self.tile_font = max(8, min(14, int(round(9 * s))))
 
     def _configure_columns(self, cols: int):
         top = max(cols, self._cols_cfg, COLS)
@@ -503,7 +616,8 @@ class DesktopPage(BasePage):
         w = self.canvas.winfo_width()
         if w > 1:
             self.canvas.itemconfigure(self._grid_win, width=w)
-            self.cols = self._cols_for_width(w)
+            self.cols, tile_w = self._plan(w)
+            self._apply_metrics(tile_w)
 
         total = len(categories) + sum(1 for i in items if not i.category)
         cols = self.cols
@@ -565,23 +679,24 @@ class DesktopPage(BasePage):
     def _slot(self, row, col):
         """固定尺寸的槽位：磁贴在里面居中，hover 放大时不会推动邻居。"""
         slot = tk.Frame(self.grid_frame,
-                        width=TILE_SIZE + TILE_PADX * 2,
-                        height=TILE_H + TILE_PADY * 2, bg=self.C["app_bg"])
+                        width=self.tile_w + TILE_PADX * 2,
+                        height=self.tile_h + TILE_PADY * 2, bg=self.C["app_bg"])
         slot.grid_propagate(False)
         slot.grid(row=row, column=col)
         return slot
 
     def _shadow(self, slot):
         """磁贴下方那一层「淡阴影」，hover 时才显形。"""
-        sh = tk.Frame(slot, width=TILE_SIZE + TILE_HOVER, bg=self.C["app_bg"],
-                      height=TILE_H + TILE_HOVER)
+        sh = tk.Frame(slot, width=self.tile_w + self.tile_hover,
+                      bg=self.C["app_bg"],
+                      height=self.tile_h + self.tile_hover)
         sh.place(relx=0.5, rely=0.5, anchor="center", y=3)
         return sh
 
     def _mini_icon(self, path: str):
         """文件夹预览用的小图标：系统可能返回比请求大的图，缩到预览尺寸。"""
-        return shrink(make_photo(icon_png(path, PREVIEW_ICON), self._photos),
-                      PREVIEW_ICON, self._photos)
+        return shrink(make_photo(icon_png(path, self.preview_icon), self._photos),
+                      self.preview_icon, self._photos)
 
     @staticmethod
     def _hover_tile(frame, children, color):
@@ -596,40 +711,48 @@ class DesktopPage(BasePage):
 
         slot = self._slot(row, col)
         shadow = self._shadow(slot)
-        frame = tk.Frame(slot, width=TILE_SIZE, height=TILE_H,
+        frame = tk.Frame(slot, width=self.tile_w, height=self.tile_h,
                          bg=c["folder_bg"], highlightthickness=0)
         frame.pack_propagate(False)      # 磁贴尺寸固定，内容不把它撑变形
         frame.place(relx=0.5, rely=0.5, anchor="center",
-                    width=TILE_SIZE, height=TILE_H)
+                    width=self.tile_w, height=self.tile_h)
 
-        canvas = tk.Canvas(frame, width=FOLDER_PREVIEW, height=FOLDER_PREVIEW,
+        canvas = tk.Canvas(frame, width=self.preview, height=self.preview,
                            bg=c["folder_bg"], highlightthickness=0)
         canvas.pack(pady=(6, 0))
-        rounded_rect(canvas, 1, 1, FOLDER_PREVIEW - 1, FOLDER_PREVIEW - 1,
-                     r=12, fill=c["folder_panel"], outline=c["folder_panel_outline"])
+        rounded_rect(canvas, 1, 1, self.preview - 1, self.preview - 1,
+                     r=self.preview_r, fill=c["folder_panel"],
+                     outline=c["folder_panel_outline"])
 
         if previews:
             for i, item in enumerate(previews):
                 r, cc = divmod(i, PREVIEW_COLS)
-                x = PREVIEW_PAD + cc * (PREVIEW_ICON + PREVIEW_GAP) + PREVIEW_ICON // 2
-                y = PREVIEW_PAD + r * (PREVIEW_ICON + PREVIEW_GAP) + PREVIEW_ICON // 2
+                x = (self.preview_pad
+                     + cc * (self.preview_icon + self.preview_gap)
+                     + self.preview_icon // 2)
+                y = (self.preview_pad
+                     + r * (self.preview_icon + self.preview_gap)
+                     + self.preview_icon // 2)
                 mini = self._mini_icon(item.path)
                 if mini:
                     canvas.create_image(x, y, image=mini)
                 else:
-                    canvas.create_rectangle(x - PREVIEW_ICON // 2 + 2, y - PREVIEW_ICON // 2 + 2,
-                                            x + PREVIEW_ICON // 2 - 2, y + PREVIEW_ICON // 2 - 2,
-                                            fill=c["placeholder"],
-                                            outline=c["placeholder_outline"])
+                    canvas.create_rectangle(
+                        x - self.preview_icon // 2 + 2,
+                        y - self.preview_icon // 2 + 2,
+                        x + self.preview_icon // 2 - 2,
+                        y + self.preview_icon // 2 - 2,
+                        fill=c["placeholder"],
+                        outline=c["placeholder_outline"])
         else:
-            canvas.create_text(FOLDER_PREVIEW // 2, FOLDER_PREVIEW // 2,
+            canvas.create_text(self.preview // 2, self.preview // 2,
                                text="空", fill=c["empty_text"],
                                font=font(12, "bold"))
 
         label = tk.Label(frame, text=f"{short_name(category)} ({count})",
                          bg=c["folder_bg"], fg=c["text"],
-                         font=font(9), cursor="hand2",
-                         wraplength=TILE_SIZE - 10, justify="center")
+                         font=font(self.tile_font), cursor="hand2",
+                         wraplength=self.tile_w - 10, justify="center")
         label.pack(pady=(4, 0))
 
         menu = tk.Menu(frame, tearoff=0)
@@ -646,7 +769,7 @@ class DesktopPage(BasePage):
         popup = lambda e: menu.tk_popup(e.x_root, e.y_root)
         enter, leave = hover_card(frame, (canvas, label), c,
                                   c["folder_bg"], c["folder_bg_hover"],
-                                  grow=TILE_HOVER, shadow=shadow, slot=slot)
+                                  grow=self.tile_hover, shadow=shadow, slot=slot)
         for w in (frame, canvas, label):
             w.bind("<Button-1>", open_cmd)
             w.bind("<Button-3>", popup)
@@ -660,16 +783,16 @@ class DesktopPage(BasePage):
         name = short_name(item.display_name)
         emoji = {"dir": "🗂", "shortcut": "🧩", "file": "📄"}.get(item.kind, "📄")
         # 先占位（emoji + 透明图保证尺寸稳定），真实图标由 _pump_icons 异步补上
-        blank = tk.PhotoImage(width=ICON_SIZE, height=ICON_SIZE)
+        blank = tk.PhotoImage(width=self.icon_size, height=self.icon_size)
         self._photos.append(blank)
         btn = tk.Button(slot, image=blank, text=f"{emoji}\n{name}",
-                        compound="top", font=font(9),
-                        width=TILE_SIZE, height=TILE_H, relief="flat",
+                        compound="top", font=font(self.tile_font),
+                        width=self.tile_w, height=self.tile_h, relief="flat",
                         bg=c["panel_bg"], fg=c["text"],
                         activebackground=c["panel_active"],
                         activeforeground=c["text"])
         btn.place(relx=0.5, rely=0.5, anchor="center",
-                  width=TILE_SIZE, height=TILE_H)
+                  width=self.tile_w, height=self.tile_h)
         btn._item_path = item.path        # 选中态用路径找回磁贴
         if item.path in self.selected:
             btn.configure(highlightthickness=2, highlightbackground=c["accent"],
@@ -692,11 +815,12 @@ class DesktopPage(BasePage):
         btn.bind("<Button-3>", lambda e, m=menu: m.tk_popup(e.x_root, e.y_root))
         btn.bind("<Button-1>", lambda e, p=item.path: self._on_tile_click(e, p))
         enter, leave = hover_card(btn, (), c, c["panel_bg"], c["panel_active"],
-                                  grow=TILE_HOVER, shadow=shadow, slot=slot)
+                                  grow=self.tile_hover, shadow=shadow, slot=slot)
         btn.bind("<Enter>", enter)
         btn.bind("<Leave>", leave)
         # 排进图标加载队列（取不到系统图标时就一直用 emoji 占位）
-        self._queue_icon(item.path, ICON_SIZE, self._tile_icon_setter(btn, name))
+        self._queue_icon(item.path, self.icon_size,
+                         self._tile_icon_setter(btn, name))
 
     # ---- 图标懒加载 ----
     def _queue_icon(self, path, size, setter):
@@ -1033,7 +1157,8 @@ class StatsPage(BasePage):
         row.pack(fill="x", pady=3)
         tk.Label(row, text=name, bg=c["app_bg"], fg=c["text"],
                  font=font(10), width=12, anchor="w").pack(side="left")
-        stat_bar(row, (n / total) if total else 0, c, width=260, height=10)
+        stat_bar(row, (n / total) if total else 0, c, width=260,
+                 height=10, stretch=True)
         pct = f"{n / total * 100:.0f}%" if total else "0%"
         tk.Label(row, text=f"{n} 项 · {pct}", bg=c["app_bg"], fg=c["sidebar_muted"],
                  font=font(9)).pack(side="left", padx=10)
@@ -1115,9 +1240,9 @@ class SystemPage(BasePage):
         val = tk.Label(card, text="—", bg=c["card_bg"], fg=c["accent"],
                        font=font(20, "bold"), anchor="w")
         val.pack(fill="x", pady=(4, 2))
-        meter = tk.Canvas(card, width=self.METER_W, height=10,
-                          bg=c["stat_bar_bg"], highlightthickness=0, bd=0)
-        meter.pack(anchor="w", pady=4)
+        meter = tk.Canvas(card, height=10, bg=c["stat_bar_bg"],
+                          highlightthickness=0, bd=0)
+        meter.pack(fill="x", pady=4)          # 随卡片变宽，不再钉死 210px
         sub = tk.Label(card, text="", bg=c["card_bg"], fg=c["sidebar_muted"],
                        font=font(9), anchor="w")
         sub.pack(fill="x")
@@ -1126,9 +1251,12 @@ class SystemPage(BasePage):
     def _set_meter(self, meter, ratio):
         meter.delete("all")
         r = 0.0 if ratio <= 0 else (1.0 if ratio >= 1 else ratio)
-        if r > 0:
-            meter.create_rectangle(0, 0, max(2, int(self.METER_W * r)), 10,
-                                   fill=self.C["stat_bar"], outline="")
+        if r <= 0:
+            return
+        # 用当前实际宽度：卡片被拉宽后进度条要跟着铺满
+        w = meter.winfo_width() or self.METER_W
+        meter.create_rectangle(0, 0, max(2, int(w * r)), 10,
+                               fill=self.C["stat_bar"], outline="")
 
     def _tick(self):
         """一次采样：更新三张卡片与折线图。"""
@@ -1829,7 +1957,7 @@ class CountdownPage(BasePage):
         c = self.C
         row = tk.Frame(parent, bg=c["card_bg"])
         row.pack(fill="x", pady=(6, 0))
-        stat_bar(row, ratio, c, width=260, height=8)
+        stat_bar(row, ratio, c, width=260, height=8, stretch=True)
         tk.Label(row, text=f"{ratio * 100:.0f}%", bg=c["card_bg"],
                  fg=c["sidebar_muted"], font=font(8)).pack(
             side="left", padx=8)
@@ -1894,6 +2022,28 @@ class SettingsPage(BasePage):
                           ("卡片", "card_bg"), ("强调", "accent")):
             tk.Label(chips, text=name, width=6, font=font(8),
                      bg=c[key], fg=c["text"], padx=4, pady=6).pack(side="left", padx=3)
+
+        self._section("首页磁贴尺寸")
+        tile_row = tk.Frame(self.body, bg=c["app_bg"])
+        tile_row.pack(anchor="w", pady=4)
+        self._tile_var = tk.StringVar(
+            value=str(self.cfg.get_setting("tile_size", "auto") or "auto"))
+        for val, text in (("auto", "随窗口自适应"), ("small", "小"),
+                          ("normal", "标准"), ("large", "大")):
+            tk.Radiobutton(tile_row, text=text, value=val,
+                           variable=self._tile_var, font=font(10),
+                           bg=c["app_bg"], fg=c["text"],
+                           selectcolor=c["panel_bg"],
+                           activebackground=c["app_bg"],
+                           activeforeground=c["text"],
+                           highlightthickness=0, bd=0,
+                           command=self._pick_tile_size).pack(
+                side="left", padx=(0, 12))
+        tk.Label(self.body, text="自适应：窗口拉大时磁贴跟着变大（图标、"
+                                 "文件夹预览、文字一同比放大）；"
+                                 "也可以固定成小 / 标准 / 大。",
+                 bg=c["app_bg"], fg=c["sidebar_muted"],
+                 font=font(9)).pack(anchor="w")
 
         self._section("桌面宠物")
         pet_row = tk.Frame(self.body, bg=c["app_bg"])
@@ -2072,6 +2222,13 @@ class SettingsPage(BasePage):
 
     def _pick_theme(self):
         self.app._apply_theme(self.var.get())
+
+    def _pick_tile_size(self):
+        """改磁贴尺寸档位：写进配置，并让已缓存的首页立刻重排一次。"""
+        self.cfg.set_setting("tile_size", self._tile_var.get())
+        page = getattr(self.app, "_pages", {}).get("home")
+        if page is not None:
+            page.refresh(rescan=False)
 
     def _pet(self, btn=None):
         """召唤 / 收起桌宠，并把按钮文字同步过来。"""

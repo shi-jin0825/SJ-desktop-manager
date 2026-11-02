@@ -11,6 +11,7 @@
 （主题、桌宠、窗口居中）。
 """
 import os
+import re
 import tkinter as tk
 from tkinter import messagebox
 
@@ -77,7 +78,8 @@ class App(tk.Tk):
         self.configure(bg=self.C["app_bg"])
         self._set_icon()
         self.minsize(900, 560)
-        center_window(self, WIN_W, WIN_H)
+        if not self._restore_geometry():
+            center_window(self, WIN_W, WIN_H)
 
         self._build_shell()
         self._show_page("home")
@@ -87,6 +89,32 @@ class App(tk.Tk):
         self.bind_all("<MouseWheel>", self._on_wheel)
         self.protocol("WM_DELETE_WINDOW", self._quit)
         self._init_hotkey()
+
+    def _restore_geometry(self):
+        """恢复上次退出时的窗口大小和位置。
+
+        用户把窗口拉大是想一直用这个尺寸——每次启动都回到初始大小等于白调。
+        换过显示器 / 拔掉外接屏时旧坐标可能整个跑到屏幕外，这里做夹限兜底。
+        """
+        geom = str(self.config_mgr.get_setting("window_geometry", "") or "")
+        m = re.match(r"^(\d+)x(\d+)\+(-?\d+)\+(-?\d+)$", geom)
+        if not m:
+            return False
+        w, h, x, y = (int(v) for v in m.groups())
+        sw, sh = self.winfo_screenwidth(), self.winfo_screenheight()
+        w, h = max(900, min(w, sw)), max(560, min(h, sh))
+        x, y = max(0, min(x, sw - 120)), max(0, min(y, sh - 120))
+        self.geometry(f"{w}x{h}+{x}+{y}")
+        return True
+
+    def _save_geometry(self):
+        """退出前记下窗口大小位置（最小化时坐标是 -32000 那种，跳过不存）。"""
+        try:
+            geom = self.geometry()
+        except tk.TclError:
+            return
+        if geom and not geom.startswith("-"):
+            self.config_mgr.set_setting("window_geometry", geom)
 
     # ---------------- 全局热键 ----------------
     def _init_hotkey(self):
@@ -671,4 +699,5 @@ class App(tk.Tk):
                     self._pet.on_close()
                 except Exception:
                     pass
+            self._save_geometry()
             self.destroy()
