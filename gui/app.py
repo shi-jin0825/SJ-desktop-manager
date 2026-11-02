@@ -20,14 +20,15 @@ from core.icons import icon_png  # noqa: F401（保持与旧引用兼容）
 from core import hotkey
 from gui.theme import DEFAULT_THEME, THEMES, THEME_NAMES, get_theme
 from gui.fonts import font
-from gui.tokens import BTN_H, FS, NAV_H, NAV_ICON, SP
+from gui.tokens import (AVATAR, BTN_H, FS, NAV_H, NAV_H_MIN, NAV_H_SM,
+                        NAV_ICON, NAV_ICON_SM, NAV_PAD, SP)
 from gui.pages import PAGE_BY_KEY, DesktopPage
 from gui.navicons import IconLabel
 from gui.widgets import (center_window, load_image_file, hline, ModernButton,
                          RoundedEntry)
 
 APP_TITLE = "墨墨桌面管理助手"
-SIDEBAR_W = 208      # 展开宽度
+SIDEBAR_W = 240      # 展开宽度（208 是主流侧栏的下限，240 才放得下加大的行高）
 SIDEBAR_W_MINI = 64  # 折叠后宽度
 WIN_W, WIN_H = 1120, 700
 MIN_W, MIN_H = 560, 420        # 能缩到的最小尺寸（和普通软件一样可以缩得很小）
@@ -123,6 +124,10 @@ class App(tk.Tk):
             self._auto_collapsed = False
             self.toggle_sidebar(persist=False)
         self._update_topbar_density()
+        # Configure 触发时子控件还没重新布局，量到的高度是旧的，
+        # 所以这里补一次空闲后的重排（只在档位真变了才重建，不会抖）
+        self._relayout_nav_if_needed()
+        self.after_idle(self._relayout_nav_if_needed)
 
     def _update_topbar_density(self):
         """很窄的窗口里藏起副标题，保住主标题不被挤出标题条。"""
@@ -274,12 +279,12 @@ class App(tk.Tk):
         self.main = tk.Frame(self, bg=self.C["app_bg"])
         self.main.pack(side="left", fill="both", expand=True)
 
-        topbar = tk.Frame(self.main, bg=self.C["topbar_bg"], height=56)
+        topbar = tk.Frame(self.main, bg=self.C["topbar_bg"], height=64)
         topbar.pack(fill="x")
         topbar.pack_propagate(False)
         self.page_title = tk.Label(topbar, text="", bg=self.C["topbar_bg"],
                                    fg=self.C["text"],
-                                   font=font(FS["lg"], "bold"))
+                                   font=font(FS["title"], "bold"))
         self.page_title.pack(side="left", padx=SP["xl"])
         self.page_sub = tk.Label(topbar, text="", bg=self.C["topbar_bg"],
                                  fg=self.C["sidebar_muted"],
@@ -305,8 +310,11 @@ class App(tk.Tk):
         self._build_user_block()
         self._build_search()
         hline(self.sidebar, c["divider"], padx=SP["md"], pady=(SP["sm"], SP["sm"]))
-        self._nav_buttons()
+        # 先建底部键再建导航：pack 按「打包顺序」分配空间，窗口很矮时
+        # 后打包的会被挤没——以前最后才打包底部键，560×420 下「折叠/退出」
+        # 被压成 2px 直接看不见。导航区是可压缩的那一个（见 _nav_metrics）。
         self._build_footer()
+        self._nav_buttons()
 
     def _build_user_block(self):
         """顶部用户信息：墨墨头像 + 当前用户名。"""
@@ -314,7 +322,7 @@ class App(tk.Tk):
         box = tk.Frame(self.sidebar, bg=c["sidebar_bg"])
         box.pack(fill="x", padx=SP["md"], pady=(SP["lg"], SP["sm"]))
         avatar = load_image_file(os.path.join(ASSETS, "momo-open.png"),
-                                 44, self._photos)
+                                 AVATAR, self._photos)
         if avatar is not None:
             tk.Label(box, image=avatar, bg=c["sidebar_bg"]).pack(
                 anchor="w" if not self.collapsed else "center")
@@ -401,10 +409,40 @@ class App(tk.Tk):
             messagebox.showinfo("搜索", "没有找到匹配的项目～", parent=self)
 
     def _nav_buttons(self):
-        """中部导航菜单（单独一个容器，切页时只重建这里）。"""
+        """中部导航菜单（单独一个容器，切页时只重建这里）。
+
+        expand=True 不是为了占满，而是让这个框「吃掉剩余高度」——
+        于是 winfo_height() 就是实际能分给导航的空间，窗口变矮时
+        _nav_metrics() 靠它把行高压紧，而不是让底部的键被挤没。
+        """
         c = self.C
         self._nav_frame = tk.Frame(self.sidebar, bg=c["sidebar_bg"])
-        self._nav_frame.pack(fill="x", pady=SP["xs"])
+        self._nav_frame.pack(fill="both", expand=True, pady=SP["xs"])
+        # 绑在自己的 Configure 上：这个框的高度就是「实际分到多少」，
+        # 比在窗口 Configure 里量可靠（那时子控件还没重新布局，量到的是旧值）
+        self._nav_frame.bind("<Configure>", lambda e: self._relayout_nav_if_needed())
+        self._nav_density = None
+        self._render_nav_items()
+
+    # ---- 矮窗口下的导航密度 ----
+    def _nav_metrics(self):
+        """(行高, 上下间距)：够高就用 NAV_H，不够就按比例压紧。"""
+        avail = self._nav_frame.winfo_height()
+        if avail <= 1:
+            return NAV_H, SP["xs"]          # 还没布局出来，先用标准值
+        per = avail / float(len(NAV_ITEMS))
+        pad = int(min(SP["xs"], max(0, (per - NAV_H) / 2.0)))
+        h = int(max(NAV_H_MIN, min(NAV_H, per - 2 * pad)))
+        return h, pad
+
+    def _relayout_nav_if_needed(self):
+        """窗口高度变了就重排导航（只在档位真变了时才重建，避免抖动）。"""
+        if getattr(self, "_nav_frame", None) is None:
+            return
+        m = self._nav_metrics()
+        if m == self._nav_density:
+            return
+        self._nav_density = m
         self._render_nav_items()
 
     def _render_nav_items(self):
@@ -421,22 +459,24 @@ class App(tk.Tk):
         bg = c["sidebar_active"] if active else c["sidebar_bg"]
         fg = c["accent"] if active else c["text"]
         icon_fg = c["accent"] if active else c["nav_icon"]
+        h, pad = self._nav_metrics()
 
         item = tk.Frame(parent, bg=bg, cursor="hand2")
-        item.pack(fill="x", padx=SP["sm"], pady=SP["xs"])
-        inner = tk.Frame(item, bg=bg, height=NAV_H)
+        item.pack(fill="x", padx=SP["sm"], pady=pad)
+        inner = tk.Frame(item, bg=bg, height=h)
         inner.pack(fill="x")
         inner.pack_propagate(False)
 
         if active and not self.collapsed:
             tk.Frame(inner, bg=c["accent"], width=3).pack(
                 side="left", fill="y", padx=(SP["none"], SP["sm"]))
-        ic = IconLabel(inner, icon, NAV_ICON, icon_fg, bg=bg)
+        ic = IconLabel(inner, icon, min(NAV_ICON, max(14, h - 8)), icon_fg,
+                       bg=bg)
         if self.collapsed:
             ic.place(relx=0.5, rely=0.5, anchor="center")
             targets = [item, inner, ic]
         else:
-            ic.pack(side="left", padx=(SP["md"], SP["md"]))
+            ic.pack(side="left", padx=NAV_PAD)
             lab = tk.Label(inner, text=label, bg=bg, fg=fg, anchor="w",
                            font=font(FS["sm"], "bold" if active else "normal"))
             lab.pack(side="left", fill="x")
@@ -479,16 +519,16 @@ class App(tk.Tk):
                 ("power", "退出", self._quit)):
             item = tk.Frame(foot, bg=c["sidebar_bg"], cursor="hand2")
             item.pack(fill="x", padx=SP["sm"], pady=SP["xs"])
-            inner = tk.Frame(item, bg=c["sidebar_bg"], height=NAV_H)
+            inner = tk.Frame(item, bg=c["sidebar_bg"], height=NAV_H_SM)
             inner.pack(fill="x")
             inner.pack_propagate(False)
-            ic = IconLabel(inner, icon, NAV_ICON, c["nav_icon"],
+            ic = IconLabel(inner, icon, NAV_ICON_SM, c["nav_icon"],
                             bg=c["sidebar_bg"])
             if self.collapsed:
                 ic.place(relx=0.5, rely=0.5, anchor="center")
                 targets = [item, inner, ic]
             else:
-                ic.pack(side="left", padx=(SP["md"], SP["md"]))
+                ic.pack(side="left", padx=NAV_PAD)
                 lab = tk.Label(inner, text=label, bg=c["sidebar_bg"],
                                fg=c["sidebar_muted"], anchor="w",
                                font=font(FS["sm"]))
