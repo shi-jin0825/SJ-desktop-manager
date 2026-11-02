@@ -460,6 +460,117 @@ def hover_card(tile, children, c, base_bg, hover_bg, grow=6, shadow=None,
     return enter, leave
 
 
+class ScrolledFrame(tk.Frame):
+    """可纵向滚动的内容区：Canvas + 主题滚动条 + 鼠标滚轮。
+
+    以前只有首页自己做了一套 Canvas 滚动，设置 / 倒计时 / 分类 / 统计这几个
+    长页面在小窗口下内容直接溢出被切掉、还没法滚动。这里抽成公共容器：
+    往 `.body` 里塞内容即可，窗口变小自动出滚动条。
+
+    center=True 时内容比可视区矮就垂直居中（首页磁贴网格用这个）。
+    """
+
+    SB_W = 14
+
+    def __init__(self, master, c: dict, center=False, padx=0, pady=0):
+        super().__init__(master, bg=c.get("app_bg", "#ffffff"))
+        self.C = dict(c or {})
+        self.center = center
+        self._scrollable = False
+        self._wheel_bound = False
+
+        self.canvas = tk.Canvas(self, bg=c.get("app_bg", "#ffffff"),
+                                highlightthickness=0)
+        self.scrollbar = tk.Scrollbar(
+            self, orient="vertical", command=self.canvas.yview,
+            width=self.SB_W, borderwidth=0, relief="flat",
+            elementborderwidth=0, highlightthickness=0, jump=1,
+            troughcolor=c.get("scroll_trough", "#eeeeee"),
+            bg=c.get("scroll_thumb", "#cccccc"),
+            activebackground=c.get("scroll_thumb_active", "#aaaaaa"))
+        self.body = tk.Frame(self.canvas, bg=c.get("app_bg", "#ffffff"))
+        self._win = self.canvas.create_window((0, 0), window=self.body,
+                                              anchor="nw")
+        self.canvas.configure(yscrollcommand=self.scrollbar.set)
+        self.canvas.pack(side="left", fill="both", expand=True,
+                         padx=(padx, 0), pady=pady)
+        self.scrollbar.pack(side="right", fill="y", padx=(6, padx), pady=pady)
+
+        self.body.bind("<Configure>", self._on_body)
+        self.canvas.bind("<Configure>", self._on_canvas)
+        self.canvas.bind("<Enter>", self._bind_wheel)
+        self.canvas.bind("<Leave>", self._unbind_wheel)
+        self.scrollbar.bind("<Enter>", lambda e: self._hover(True))
+        self.scrollbar.bind("<Leave>", lambda e: self._hover(False))
+
+    # ---- 布局同步 ----
+    def _on_body(self, event=None):
+        self._place()
+
+    def _on_canvas(self, event=None):
+        w = event.width if event is not None and event.width > 1 \
+            else self.canvas.winfo_width()
+        if w > 1:
+            self.canvas.itemconfigure(self._win, width=w)
+        self._place()
+
+    def _place(self):
+        """内容比可视区矮时（仅限 center 模式）垂直居中，否则顶到最上面。"""
+        ch = self.canvas.winfo_height()
+        fh = self.body.winfo_reqheight()
+        if self.center and ch > 1 and 0 < fh < ch:
+            self.canvas.coords(self._win, 0, (ch - fh) // 2)
+            self.canvas.configure(
+                scrollregion=(0, 0, max(1, self.body.winfo_width()), ch))
+        else:
+            self.canvas.coords(self._win, 0, 0)
+            try:
+                self.canvas.configure(scrollregion=self.canvas.bbox("all"))
+            except tk.TclError:
+                pass
+        self._update()
+
+    def _update(self):
+        ch = self.canvas.winfo_height()
+        fh = self.body.winfo_reqheight()
+        self._scrollable = ch > 1 and fh > ch
+        c = self.C
+        self.scrollbar.configure(
+            troughcolor=c.get("scroll_trough", "#eeeeee"),
+            bg=(c.get("scroll_thumb", "#cccccc") if self._scrollable
+                else c.get("scroll_trough", "#eeeeee")))
+
+    def _hover(self, on: bool):
+        if self._scrollable:
+            self.scrollbar.configure(
+                bg=self.C.get("scroll_thumb_active", "#aaaaaa") if on
+                else self.C.get("scroll_thumb", "#cccccc"))
+
+    # ---- 滚轮 ----
+    def _bind_wheel(self, _=None):
+        # 只有指针在这个区域里时才占用滚轮（全局 bind_all，离开就放开）
+        self._wheel_bound = True
+        self.canvas.bind_all("<MouseWheel>", self._on_wheel)
+
+    def _unbind_wheel(self, _=None):
+        if self._wheel_bound:
+            self._wheel_bound = False
+            try:
+                self.canvas.unbind_all("<MouseWheel>")
+            except tk.TclError:
+                pass
+
+    def _on_wheel(self, event):
+        if self._scrollable:
+            self.canvas.yview_scroll(int(-1 * (event.delta / 120.0)) or -1,
+                                     "units")
+        return "break"
+
+    def destroy(self):
+        self._unbind_wheel()
+        super().destroy()
+
+
 def hline(parent, color, padx=0, pady=6):
     """一条水平分隔线。"""
     f = tk.Frame(parent, bg=color, height=1)

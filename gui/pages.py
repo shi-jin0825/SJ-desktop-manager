@@ -21,7 +21,7 @@ from gui.theme import (DEFAULT_THEME, THEMES, THEME_NAMES, get_theme, style_menu
 from gui.fonts import font
 from gui.widgets import (open_target, make_photo, rounded_rect, short_name,
                          center_window, hline, stat_bar, shrink,
-                         ModernButton, hover_card)
+                         ModernButton, hover_card, ScrolledFrame)
 
 # ---- 磁贴尺寸（基准值；网格变宽时整体按倍率放大） ----
 TILE_SIZE = 96      # 磁贴基准宽度（px）
@@ -59,7 +59,7 @@ MAX_PREVIEW = PREVIEW_COLS ** 2
 
 UNDO_DEPTH = 10         # 「撤销上一步」最多记住几步整理操作
 
-APP_VERSION = "v1.0"
+APP_VERSION = "v1.7"      # 设置页「关于」显示；发版时跟着更新日志一起改
 KIND_LABEL = {"shortcut": "快捷方式", "dir": "文件夹", "file": "文件"}
 
 
@@ -216,6 +216,16 @@ class BasePage(tk.Frame):
 
     BTN_W = 130         # 按钮估宽：用来算一行能放几个（自动换行用）
 
+    def _scroll_body(self, padx=16, pady=(0, 12), center=False):
+        """建一个可滚动的内容区，返回容器（真正的内容往它的 .body 里塞）。
+
+        长页面（设置 / 倒计时 / 分类 / 统计 / 监控）内容超过一屏时，
+        以前是直接被切掉且滚不动——只有首页自己带了一套 Canvas 滚动。
+        """
+        sc = ScrolledFrame(self, self.C, center=center, padx=padx, pady=pady)
+        sc.pack(fill="both", expand=True)
+        return sc
+
     def _toolbar(self, buttons, primary=None):
         """页面顶部的一条胶囊渐变按钮（(文字, 命令) 或 (图标, 文字, 命令)）。
 
@@ -314,27 +324,14 @@ class DesktopPage(BasePage):
         self.sel_host = tk.Frame(self, bg=c["app_bg"])
         self.sel_host.pack(fill="x", padx=16, after=self.winfo_children()[0])
         self._build_selbar()
-        container = tk.Frame(self, bg=c["app_bg"])
-        container.pack(fill="both", expand=True, padx=16, pady=(0, 12))
-        self.canvas = tk.Canvas(container, bg=c["app_bg"], highlightthickness=0)
-        scrollbar = tk.Scrollbar(container, orient="vertical",
-                                 command=self.canvas.yview,
-                                 width=14, borderwidth=0, relief="flat",
-                                 elementborderwidth=0, highlightthickness=0,
-                                 troughcolor=c["scroll_trough"],
-                                 bg=c["scroll_thumb"],
-                                 activebackground=c["scroll_thumb_active"],
-                                 jump=1)
-        self.scrollbar = scrollbar
-        scrollbar.bind("<Enter>", lambda e: self._hover_scrollbar(True))
-        scrollbar.bind("<Leave>", lambda e: self._hover_scrollbar(False))
-        self.grid_frame = tk.Frame(self.canvas, bg=c["app_bg"])
-        self._grid_win = self.canvas.create_window((0, 0), window=self.grid_frame,
-                                                   anchor="nw")
+        # 内容区：可滚动（和设置 / 统计等长页面共用一套滚动容器）
+        sc = ScrolledFrame(self, c, center=True, padx=16, pady=(0, 12))
+        sc.pack(fill="both", expand=True)
+        self.canvas = sc.canvas
+        self.scrollbar = sc.scrollbar
+        self.grid_frame = sc.body
+        self._grid_win = sc._win
         self.grid_frame.bind("<Configure>", self._on_grid_configure)
-        self.canvas.configure(yscrollcommand=scrollbar.set)
-        self.canvas.pack(side="left", fill="both", expand=True)
-        scrollbar.pack(side="right", fill="y", padx=(6, 0))
         self.canvas.bind("<Configure>", self._on_canvas_resize)
         self.refresh()
 
@@ -1031,8 +1028,7 @@ class CategoriesPage(BasePage):
         c = self.C
         self._toolbar([("folder", "新建分类", self._add),
                        ("refresh", "刷新", self.refresh)], primary="新建分类")
-        self.body = tk.Frame(self, bg=c["app_bg"])
-        self.body.pack(fill="both", expand=True, padx=16, pady=(0, 12))
+        self.body = self._scroll_body().body
         self.refresh()
 
     def refresh(self):
@@ -1045,7 +1041,8 @@ class CategoriesPage(BasePage):
             item.category = self.cfg.get_category(item.path, item.name)
 
         if not self.cfg.categories:
-            tk.Label(self.body, text="还没有分类，点右上角「➕ 新建分类」创建第一个",
+            tk.Label(self.body, text="还没有分类，点上方工具栏的「📁 新建分类」"
+                                     "创建第一个",
                      bg=c["app_bg"], fg=c["text_muted"],
                      font=font(11)).pack(pady=40)
             self.app.update_topbar("暂无分类")
@@ -1125,8 +1122,7 @@ class StatsPage(BasePage):
 
     def _build(self):
         self._toolbar([("refresh", "刷新", self.refresh)])
-        self.body = tk.Frame(self, bg=self.C["app_bg"])
-        self.body.pack(fill="both", expand=True, padx=16, pady=(0, 12))
+        self.body = self._scroll_body().body
         self.refresh()
 
     def refresh(self):
@@ -1218,8 +1214,7 @@ class SystemPage(BasePage):
                  bg=c["app_bg"], fg=c["sidebar_muted"],
                  font=font(9)).pack(side="left")
 
-        body = tk.Frame(self, bg=c["app_bg"])
-        body.pack(fill="both", expand=True, padx=16, pady=(0, 12))
+        body = self._scroll_body().body
 
         grid = tk.Frame(body, bg=c["app_bg"])
         grid.pack(fill="x")
@@ -1798,8 +1793,7 @@ class CountdownPage(BasePage):
                        ("clock", "开始番茄钟", self._start_pomo),
                        ("close", "结束番茄钟", self._stop_pomo),
                        ("refresh", "刷新", self.refresh)])
-        self.body = tk.Frame(self, bg=c["app_bg"])
-        self.body.pack(fill="both", expand=True, padx=16, pady=(0, 12))
+        self.body = self._scroll_body().body
         self.refresh()
         self._job = self.after(self.REFRESH_MS, self._auto)
 
@@ -2034,8 +2028,7 @@ class SettingsPage(BasePage):
 
     def _build(self):
         c = self.C
-        self.body = tk.Frame(self, bg=c["app_bg"])
-        self.body.pack(fill="both", expand=True, padx=16, pady=12)
+        self.body = self._scroll_body(pady=12).body
 
         self._section("外观主题")
         self.var = tk.StringVar(value=self.app.theme_name)

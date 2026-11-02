@@ -148,7 +148,10 @@ class App(tk.Tk):
             return False
         w, h, x, y = (int(v) for v in m.groups())
         sw, sh = self.winfo_screenwidth(), self.winfo_screenheight()
-        w, h = max(900, min(w, sw)), max(560, min(h, sh))
+        # 下限必须引用 MIN_W/MIN_H：早先这里写死 900×560，于是
+        # 「能把窗口缩多小」和「记住你上次缩到多大」两个特性互相打架——
+        # 缩到 600×450 退出，下次启动又被弹回 900×560。
+        w, h = max(MIN_W, min(w, sw)), max(MIN_H, min(h, sh))
         x, y = max(0, min(x, sw - 120)), max(0, min(y, sh - 120))
         self.geometry(f"{w}x{h}+{x}+{y}")
         return True
