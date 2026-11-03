@@ -46,7 +46,6 @@ NAV_ITEMS = (
     ("home", "home", "首页"),
     ("categories", "grid", "分类管理"),
     ("stats", "chart", "数据统计"),
-    ("system", "monitor", "系统监控"),
     ("countdowns", "clock", "专属倒计时"),
     ("settings", "gear", "设置"),
 )
@@ -583,7 +582,6 @@ class App(tk.Tk):
         页面实例会被缓存：切走时只是 pack_forget（不再销毁重建），
         切回来时再 pack 出来。好处是
           · 不会每次点导航都重扫一遍桌面、重建搜索框（丢了输入焦点）；
-          · 系统监控页不会每次重新预热采样；
           · 视觉上也不闪。
         force=True 时强制重建（比如刚改完分类、需要彻底刷新的场合）。
         """
@@ -623,7 +621,7 @@ class App(tk.Tk):
             hide = getattr(p, "on_hide", None)
             if hide is not None:
                 try:
-                    hide()          # 比如系统监控页可以停掉采样定时器
+                    hide()          # 页面有后台任务时可在这里停掉（通用钩子）
                 except tk.TclError:
                     pass
         page.pack(fill="both", expand=True)

@@ -65,9 +65,9 @@ HAPPY_MS = 900               # 单击后开心形态保持毫秒数
 SHY_AFTER_CLICKS = 5         # 3 秒内连续点击多少次后害羞
 SHY_MS = 1600                # 害羞形态保持毫秒数
 
-MONITOR_PERIOD_S = 1.2       # 系统状态采样间隔
+MONITOR_PERIOD_S = 1.0       # 系统状态采样间隔
 CPU_HOT = 80                 # CPU 占用超过此值 → 好热
-MEM_TIRED = 85               # 内存负载超过此值 → 疲惫
+MEM_TIRED = 90               # 内存负载超过此值 → 疲惫
 NET_FAST = 400 * 1024        # 下载速度超过此值 → 奔跑（字节/秒）
 NET_RUN_SPEED = 150          # 奔跑横向速度基准 px/s（随网速加快）
 SQUASH_MS = 260              # 落地压缩动画总时长

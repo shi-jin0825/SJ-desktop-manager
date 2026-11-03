@@ -13,7 +13,6 @@ from tkinter import messagebox
 
 from core.scanner import scan_desktop, get_desktop_paths
 from core.icons import icon_png
-from core import sysinfo
 from core import countdown as cd
 from core import hotkey
 from core.undo import UndoStack
@@ -77,7 +76,7 @@ MAX_PREVIEW = PREVIEW_COLS ** 2
 
 UNDO_DEPTH = 10         # 「撤销上一步」最多记住几步整理操作
 
-APP_VERSION = "v1.10"      # 设置页「关于」显示；发版时跟着更新日志一起改
+APP_VERSION = "v1.11"      # 设置页「关于」显示；发版时跟着更新日志一起改
 KIND_LABEL = {"shortcut": "快捷方式", "dir": "文件夹", "file": "文件"}
 
 
@@ -1250,214 +1249,7 @@ class StatsPage(BasePage):
 
 
 # ======================================================================
-# 4. 系统监控页：CPU / 内存 / 网速（每秒刷新）
-# ======================================================================
-class SystemPage(BasePage):
-    key = "system"
-    title = "系统监控"
-    subtitle = "CPU 占用率、内存剩余与实时网速"
-    INTERVAL = 1000        # 刷新间隔（毫秒）
-    HISTORY = 60           # 折线图保留的采样点数
-    GRAPH_H = px(130)          # 折线图最小高度
-    GRAPH_MAX_H = px(300)      # 折线图最高长到这个高度（窗口再高也不继续拉）
-    METER_W = 210          # 卡片内进度条宽度
-
-    def _build(self):
-        c = self.C
-        self._history = []
-        self._job = None
-
-        bar = self._toolbar([("refresh", "立即刷新", self._tick)])
-        tk.Label(bar, text="每 1 秒自动刷新 · 数据来自 Windows 系统接口",
-                 bg=c["app_bg"], fg=c["sidebar_muted"],
-                 font=font(FS["xs"])).pack(side="left")
-
-        body = self._scroll_body().body
-
-        grid = tk.Frame(body, bg=c["app_bg"])
-        grid.pack(fill="x")
-        for i in range(3):
-            grid.grid_columnconfigure(i, weight=1)
-        self._cpu_val, self._cpu_meter, self._cpu_sub = self._card(grid, 0, "CPU 占用率")
-        self._mem_val, self._mem_meter, self._mem_sub = self._card(grid, 1, "内存剩余")
-        self._net_val, self._net_meter, self._net_sub = self._card(grid, 2, "实时网速")
-
-        hline(body, c["divider"], pady=(SP["md"], SP["xs"]))
-        tk.Label(body, text=f"CPU 使用率（最近 {self.HISTORY} 秒）",
-                 bg=c["app_bg"], fg=c["text"],
-                 font=font(FS["sm"], "bold"), anchor="w").pack(
-            fill="x", pady=(SP["sm"], SP["xs"]))
-        self.graph = tk.Canvas(body, height=self.GRAPH_H, bg=c["card_bg"],
-                               highlightthickness=1,
-                               highlightbackground=c["divider"])
-        self.graph.pack(fill="x")
-        # 图表高度跟着窗口：以前钉死 130px，窗口拉高后上方卡片拉开了、图还是一条
-        self.bind("<Configure>", self._on_page_resize)
-
-        sysinfo.prime()                       # 建立采样基准
-        self._draw_graph()                    # 先画空网格
-
-    def _on_page_resize(self, event=None):
-        """窗口拉高时把折线图也拉高（上下限封顶，别一头沉）。"""
-        if getattr(self, "graph", None) is None:
-            return
-        h = self.winfo_height()
-        if h <= 1:
-            return
-        want = max(self.GRAPH_H, min(self.GRAPH_MAX_H, int(h * 0.30)))
-        if abs(want - self.graph.winfo_height()) < 4:
-            return
-        self.graph.configure(height=want)
-        self._draw_graph()
-
-    def on_show(self):
-        """切回本页时重启采样（切走时已停掉，不在后台空转）。"""
-        self._start_timer()
-
-    def on_hide(self):
-        self._stop_timer()
-
-    def _start_timer(self):
-        if self._job is None:
-            self._tick()
-        return
-
-    def _stop_timer(self):
-        if self._job is not None:
-            try:
-                self.after_cancel(self._job)
-            except tk.TclError:
-                pass
-            self._job = None
-
-    def _card(self, parent, col, title):
-        """一张指标卡：标题 + 大数值 + 进度条 + 补充说明。"""
-        c = self.C
-        card = tk.Frame(parent, bg=c["card_bg"], highlightthickness=1,
-                        highlightbackground=c["divider"], padx=SP["lg"], pady=SP["md"])
-        card.grid(row=0, column=col, padx=SP["sm"], pady=SP["sm"], sticky="nsew")
-        tk.Label(card, text=title, bg=c["card_bg"], fg=c["sidebar_muted"],
-                 font=font(FS["xs"]), anchor="w").pack(fill="x")
-        val = tk.Label(card, text="—", bg=c["card_bg"], fg=c["accent"],
-                       font=font(FS["xl"], "bold"), anchor="w")
-        val.pack(fill="x", pady=(SP["xs"], SP["xs"]))
-        meter = tk.Canvas(card, height=BAR_H, bg=c["stat_bar_bg"],
-                          highlightthickness=0, bd=0)
-        meter.pack(fill="x", pady=SP["xs"])          # 随卡片变宽，不再钉死 210px
-        sub = tk.Label(card, text="", bg=c["card_bg"], fg=c["sidebar_muted"],
-                       font=font(FS["xs"]), anchor="w")
-        sub.pack(fill="x")
-        return val, meter, sub
-
-    def _set_meter(self, meter, ratio):
-        meter.delete("all")
-        r = 0.0 if ratio <= 0 else (1.0 if ratio >= 1 else ratio)
-        if r <= 0:
-            return
-        # 用当前实际宽度：卡片被拉宽后进度条要跟着铺满
-        w = meter.winfo_width() or self.METER_W
-        meter.create_rectangle(0, 0, max(2, int(w * r)), 10,
-                               fill=self.C["stat_bar"], outline="")
-
-    def _tick(self):
-        """一次采样：更新三张卡片与折线图。"""
-        c = self.C
-        cpu = sysinfo.cpu_percent()
-        if cpu is None:
-            cpu = 0.0
-        self._history.append(cpu)
-        del self._history[:-self.HISTORY]
-
-        mem = sysinfo.mem_info()
-        speed = sysinfo.net_speed()
-
-        self._cpu_val.config(text=f"{cpu:.0f}%")
-        self._set_meter(self._cpu_meter, cpu / 100.0)
-        self._cpu_sub.config(text=f"逻辑处理器 {sysinfo.cpu_count()} 个")
-
-        if mem:
-            self._mem_val.config(text=sysinfo.fmt_bytes(mem["avail"]))
-            self._set_meter(self._mem_meter,
-                            (mem["used"] / mem["total"]) if mem["total"] else 0)
-            self._mem_sub.config(
-                text=f"已用 {sysinfo.fmt_bytes(mem['used'])} / "
-                     f"共 {sysinfo.fmt_bytes(mem['total'])}（{mem['load']}%）")
-        else:
-            self._mem_val.config(text="—")
-            self._mem_sub.config(text="无法读取内存信息")
-
-        if speed:
-            down, up, ifname = speed
-            self._net_val.config(text="↓ " + sysinfo.fmt_speed(down))
-            self._set_meter(self._net_meter, max(down, up, 1.0) / (10 * 1024 * 1024))
-            rx, tx, _ = sysinfo.net_counters()
-            who = f"{ifname} · " if ifname else ""
-            self._net_sub.config(text=f"↑ {sysinfo.fmt_speed(up)}\n"
-                                      f"{who}累计 ↓{sysinfo.fmt_bytes(rx)} ↑{sysinfo.fmt_bytes(tx)}")
-        else:
-            self._net_val.config(text="↓ —")
-            self._net_sub.config(text="采样中…")
-
-        self._draw_graph()
-        self.app.update_topbar(f"CPU {cpu:.0f}% · "
-                               + (f"内存可用 {sysinfo.fmt_bytes(mem['avail'])}" if mem else ""))
-        self._job = self.after(self.INTERVAL, self._tick)
-
-    def _draw_graph(self):
-        """画 CPU 折线图（含 0/50/100% 网格线）。
-
-        左侧要给刻度文字留完整的空间（PAD_L），绘图区从刻度右边开始——
-        以前刻度贴着画布左缘、绘图区紧跟着挤在旁边，看起来像左边被裁掉一块。
-        """
-        c = self.C
-        cv = self.graph
-        w = max(240, cv.winfo_width())
-        h = max(self.GRAPH_H, cv.winfo_height())
-        cv.configure(width=w)
-        cv.delete("all")
-        pad_l, pad_r, pad_t, pad_b = px(56), px(14), px(14), px(20)
-        y0, y1 = pad_t, h - pad_b
-        span = y1 - y0
-        # 网格线 + 刻度：文字右缘距绘图区 10px，完整落在画布内
-        for pct in (0, 50, 100):
-            y = y1 - span * pct / 100.0
-            cv.create_line(pad_l, y, w - pad_r, y, fill=c["divider"])
-            cv.create_text(pad_l - 10, y, text=f"{pct}%", anchor="e",
-                           fill=c["sidebar_muted"], font=font(FS["xs"]))
-        hist = self._history
-        if len(hist) >= 2:
-            step = (w - pad_l - pad_r) / float(self.HISTORY - 1)
-            pts = []
-            for i, v in enumerate(hist):
-                x = pad_l + i * step
-                y = y1 - span * min(100.0, max(0.0, v)) / 100.0
-                pts.append((x, y))
-            poly = list(pts) + [(pts[-1][0], y1), (pts[0][0], y1)]
-            cv.create_polygon(poly, fill=c["stat_bar_bg"], outline="")
-            cv.create_line([p for pt in pts for p in pt], fill=c["stat_bar"], width=2)
-            cv.create_oval(pts[-1][0] - 3, pts[-1][1] - 3,
-                           pts[-1][0] + 3, pts[-1][1] + 3,
-                           fill=c["stat_bar"], outline="")
-            cv.create_text(w - pad_r, 12, text=f"当前 {hist[-1]:.0f}%", anchor="ne",
-                           fill=c["text"], font=font(FS["xs"], "bold"))
-        else:
-            cv.create_text(w // 2, h // 2, text="采集中…", fill=c["sidebar_muted"],
-                           font=font(FS["sm"]))
-
-    def destroy(self):
-        """页面销毁时停掉定时任务，避免回调打到已销毁的控件。"""
-        job = getattr(self, "_job", None)
-        if job is not None:
-            try:
-                self.after_cancel(job)
-            except Exception:
-                pass
-            self._job = None
-        super().destroy()
-
-
-# ======================================================================
-# 5. 专属倒计时（倒数日）
+# 4. 专属倒计时（倒数日）
 # ======================================================================
 class CountdownDialog(tk.Toplevel):
     """新建 / 编辑一条倒计时的弹窗。"""
@@ -2084,7 +1876,7 @@ class CountdownPage(BasePage):
 
 
 # ======================================================================
-# 6. 设置页
+# 5. 设置页
 # ======================================================================
 class SettingsPage(BasePage):
     key = "settings"
@@ -2327,6 +2119,6 @@ class SettingsPage(BasePage):
             btn.set_text("收起宠物" if self.app.pet_active() else "召唤宠物")
 
 
-PAGES = (DesktopPage, CategoriesPage, StatsPage, SystemPage,
+PAGES = (DesktopPage, CategoriesPage, StatsPage,
          CountdownPage, SettingsPage)
 PAGE_BY_KEY = {p.key: p for p in PAGES}
