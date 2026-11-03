@@ -15,7 +15,7 @@ from tkinter import messagebox
 
 from gui.navicons import ICONS, IconLabel, draw_icon
 from gui import fonts
-from gui.tokens import BAR_H, FS, SP
+from gui.tokens import BAR_H, BTN_H_LG, BTN_PAD, FS, SP
 
 
 # ---- 颜色小工具（渐变按钮用）----
@@ -147,12 +147,12 @@ class ModernButton(tk.Canvas):
     看起来更接近现代 App；行为（hover / 点击）与 tk.Button 一致。
     """
 
-    FONT_SIZE = 10      # 字体族由 gui/fonts 在运行时解析（不在 import 时定死）
+    FONT_SIZE = 11      # 字体族由 gui/fonts 在运行时解析（不在 import 时定死）
     ICON_GAP = 7
 
     def __init__(self, master, text="", command=None, c=None, primary=False,
-                 icon=None, height=34, padx=SP["lg"], font=None, icon_size=17,
-                 bg=None):
+                 icon=None, height=BTN_H_LG, padx=BTN_PAD, font=None,
+                 icon_size=18, bg=None):
         c = dict(c or {})
         self.c = c
         # 胶囊边缘抗锯齿要往「所在底色」上混：放在卡片里就得用 card_bg，

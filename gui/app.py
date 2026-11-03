@@ -28,7 +28,7 @@ from gui.widgets import (center_window, load_image_file, hline, ModernButton,
                          RoundedEntry)
 
 APP_TITLE = "墨墨桌面管理助手"
-SIDEBAR_W = 240      # 展开宽度（208 是主流侧栏的下限，240 才放得下加大的行高）
+SIDEBAR_W = 210      # 展开宽度（按设计稿：紧凑侧栏，内容区让出更多宽度）
 SIDEBAR_W_MINI = 64  # 折叠后宽度
 WIN_W, WIN_H = 1120, 700
 MIN_W, MIN_H = 560, 420        # 能缩到的最小尺寸（和普通软件一样可以缩得很小）

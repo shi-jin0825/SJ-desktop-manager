@@ -232,7 +232,7 @@ class BasePage(tk.Frame):
     def on_hide(self):
         pass
 
-    BTN_W = 130         # 按钮估宽：用来算一行能放几个（自动换行用）
+    BTN_W = 156         # 按钮估宽：用来算一行能放几个（自动换行用，跟着大按钮走）
 
     def _card_buttons(self, parent, actions, side="right"):
         """卡片里的按钮：和工具栏同一套胶囊按钮语言，只是小一号。
@@ -249,7 +249,7 @@ class BasePage(tk.Frame):
             primary = item[2] if len(item) > 2 else False
             ModernButton(row, text=text, command=cmd, c=c, primary=primary,
                          height=BTN_H_SM, padx=SP["md"],
-                         font=font(FS["xs"]), icon_size=15,
+                         font=font(FS["sm"]), icon_size=16,
                          bg=c["card_bg"]).pack(side="left", padx=SP["xs"])
         return row
 
@@ -1041,10 +1041,9 @@ class DesktopPage(BasePage):
                 ("gear", "重命名", do_rename, False),
                 ("close", "删除", do_delete, False)):
             ModernButton(bar, text=text, command=cmd, c=c, icon=icon,
-                         primary=primary, height=30, padx=SP["md"]).pack(
-                side="left", padx=SP["xs"])
+                         primary=primary).pack(side="left", padx=SP["xs"])
         ModernButton(bar, text="关闭", command=win.destroy, c=c,
-                     height=30).pack(side="right")
+                     ).pack(side="right")
 
         lst.bind("<Double-Button-1>", lambda e: do_rename())
         reload()
@@ -1385,27 +1384,32 @@ class SystemPage(BasePage):
         self._job = self.after(self.INTERVAL, self._tick)
 
     def _draw_graph(self):
-        """画 CPU 折线图（含 0/50/100% 网格线）。"""
+        """画 CPU 折线图（含 0/50/100% 网格线）。
+
+        左侧要给刻度文字留完整的空间（PAD_L），绘图区从刻度右边开始——
+        以前刻度贴着画布左缘、绘图区紧跟着挤在旁边，看起来像左边被裁掉一块。
+        """
         c = self.C
         cv = self.graph
         w = max(240, cv.winfo_width())
         h = max(self.GRAPH_H, cv.winfo_height())
         cv.configure(width=w)
         cv.delete("all")
-        y0, y1 = 12, h - 12          # 留上下边距
+        pad_l, pad_r, pad_t, pad_b = 56, 14, 14, 20
+        y0, y1 = pad_t, h - pad_b
         span = y1 - y0
-        # 网格线
+        # 网格线 + 刻度：文字右缘距绘图区 10px，完整落在画布内
         for pct in (0, 50, 100):
             y = y1 - span * pct / 100.0
-            cv.create_line(40, y, w - 8, y, fill=c["divider"])
-            cv.create_text(34, y, text=f"{pct}%", anchor="e",
+            cv.create_line(pad_l, y, w - pad_r, y, fill=c["divider"])
+            cv.create_text(pad_l - 10, y, text=f"{pct}%", anchor="e",
                            fill=c["sidebar_muted"], font=font(FS["xs"]))
         hist = self._history
         if len(hist) >= 2:
-            step = (w - 48) / float(self.HISTORY - 1)
+            step = (w - pad_l - pad_r) / float(self.HISTORY - 1)
             pts = []
             for i, v in enumerate(hist):
-                x = 40 + i * step
+                x = pad_l + i * step
                 y = y1 - span * min(100.0, max(0.0, v)) / 100.0
                 pts.append((x, y))
             poly = list(pts) + [(pts[-1][0], y1), (pts[0][0], y1)]
@@ -1414,7 +1418,7 @@ class SystemPage(BasePage):
             cv.create_oval(pts[-1][0] - 3, pts[-1][1] - 3,
                            pts[-1][0] + 3, pts[-1][1] + 3,
                            fill=c["stat_bar"], outline="")
-            cv.create_text(w - 8, 12, text=f"当前 {hist[-1]:.0f}%", anchor="ne",
+            cv.create_text(w - pad_r, 12, text=f"当前 {hist[-1]:.0f}%", anchor="ne",
                            fill=c["text"], font=font(FS["xs"], "bold"))
         else:
             cv.create_text(w // 2, h // 2, text="采集中…", fill=c["sidebar_muted"],
