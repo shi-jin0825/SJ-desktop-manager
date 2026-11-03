@@ -21,18 +21,19 @@ from core import hotkey
 from gui.theme import DEFAULT_THEME, THEMES, THEME_NAMES, get_theme
 from gui.fonts import font
 from gui.tokens import (AVATAR, BTN_H, FS, NAV_H, NAV_H_MIN, NAV_H_SM,
-                        NAV_ICON, NAV_ICON_SM, NAV_PAD, SP)
+                        NAV_ICON, NAV_ICON_SM, NAV_PAD, SIDEBAR_W,
+                        SIDEBAR_W_MINI, SP, TEXT_PAD)
 from gui.pages import PAGE_BY_KEY, DesktopPage
 from gui.navicons import IconLabel
-from gui.widgets import (center_window, load_image_file, hline, ModernButton,
-                         RoundedEntry)
+from gui.widgets import (center_window, fit_label, load_image_file, hline,
+                         ModernButton, RoundedEntry)
 
 APP_TITLE = "墨墨桌面管理助手"
-SIDEBAR_W = 210      # 展开宽度（按设计稿：紧凑侧栏，内容区让出更多宽度）
-SIDEBAR_W_MINI = 64  # 折叠后宽度
 WIN_W, WIN_H = 1120, 700
 MIN_W, MIN_H = 560, 420        # 能缩到的最小尺寸（和普通软件一样可以缩得很小）
-AUTO_COLLAPSE_W = 780          # 窄到这个宽度就自动收起侧边栏，把宽度让给内容
+# 窄到这个宽度就自动收起侧边栏，把宽度让给内容区：阈值取「内容区至少还剩
+# MIN_W」——栏加宽到 240 后 780 会留下 540 的内容区，反而不如收起侧栏。
+AUTO_COLLAPSE_W = MIN_W + SIDEBAR_W     # 800
 NARROW_W = 700                 # 再窄就藏起标题条里的副标题
 
 ASSETS = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
@@ -331,13 +332,16 @@ class App(tk.Tk):
                      font=font(FS["xl"])).pack()
         if not self.collapsed:
             user = os.environ.get("USERNAME") or os.environ.get("USER") or "本机用户"
-            tk.Label(box, text=user, bg=c["sidebar_bg"], fg=c["text"],
-                     font=font(FS["sm"], "bold"), anchor="w").pack(
+            # 用户名长短不一，fit_label 按实际宽度截断，不会顶出侧边栏
+            fit_label(tk.Label(box, text=user, bg=c["sidebar_bg"], fg=c["text"],
+                               font=font(FS["sm"], "bold"), anchor="w"),
+                      user, pad=TEXT_PAD).pack(
                 fill="x", pady=(SP["sm"], SP["none"]))
             done = len(self.config_mgr.data.get("assignments", {}))
-            tk.Label(box, text=f"已归类 {done} 项", bg=c["sidebar_bg"],
-                     fg=c["sidebar_muted"], font=font(FS["xs"]),
-                     anchor="w").pack(fill="x")
+            sub = f"已归类 {done} 项"
+            fit_label(tk.Label(box, text=sub, bg=c["sidebar_bg"],
+                               fg=c["sidebar_muted"], font=font(FS["xs"]),
+                               anchor="w"), sub, pad=TEXT_PAD).pack(fill="x")
 
     # ---------------- 全局搜索 ----------------
     def _build_search(self):
@@ -479,7 +483,11 @@ class App(tk.Tk):
             ic.pack(side="left", padx=NAV_PAD)
             lab = tk.Label(inner, text=label, bg=bg, fg=fg, anchor="w",
                            font=font(FS["sm"], "bold" if active else "normal"))
-            lab.pack(side="left", fill="x")
+            # expand=True 让文字吃掉整条剩余宽度：这样它的可用宽度是固定的
+            # （不随文字长短变化），fit_label 才有稳定的基准去判断放不放得下
+            lab.pack(side="left", fill="x", expand=True,
+                     padx=(SP["none"], TEXT_PAD))
+            fit_label(lab, label, pad=TEXT_PAD)
             targets = [item, inner, ic, lab]
 
         hover_bg = c["sidebar_active"] if active else c["sidebar_hover"]
@@ -532,7 +540,9 @@ class App(tk.Tk):
                 lab = tk.Label(inner, text=label, bg=c["sidebar_bg"],
                                fg=c["sidebar_muted"], anchor="w",
                                font=font(FS["sm"]))
-                lab.pack(side="left", fill="x")
+                lab.pack(side="left", fill="x", expand=True,
+                         padx=(SP["none"], TEXT_PAD))
+                fit_label(lab, label, pad=TEXT_PAD)
                 targets = [item, inner, ic, lab]
             enter, leave = self._hover_group(targets, c["sidebar_bg"],
                                              c["sidebar_hover"])

@@ -114,6 +114,60 @@ def short_name(name: str, limit: int = 12) -> str:
     return name if len(name) <= limit else name[:limit - 1] + "…"
 
 
+def fit_text(text: str, fnt, max_w: int) -> str:
+    """按**像素宽度**截断文字（放不下就加省略号）。
+
+    short_name() 按字数截，中文和英文宽度差一倍多，12 个汉字和 12 个 W
+    根本不是一回事，所以按字数截经常还是被裁。这里用字体实际度量，
+    保证截断后一定能放进 max_w。
+    """
+    if max_w <= 0 or not text:
+        return text
+    if fnt.measure(text) <= max_w:
+        return text
+    for n in range(len(text) - 1, 0, -1):
+        cut = text[:n] + "…"
+        if fnt.measure(cut) <= max_w:
+            return cut
+    return "…" if fnt.measure("…") <= max_w else ""
+
+
+def fit_label(label, text: str, pad: int = 0):
+    """让标签的文字跟着自己的实际宽度走：放不下就截，永远不出现半个字。
+
+    tkinter 的 Label 在 pack(fill="x") 且空间不足时是硬裁——最后一个字
+    会被削掉一半，看着像渲染坏了。这里在布局完成后按真实宽度重排一次，
+    宽度再变（侧边栏折叠 / 窗口缩放）也会跟着更新。
+    """
+    try:
+        fnt = tkfont.Font(font=label.cget("font"))
+    except Exception:
+        label.configure(text=text)
+        return label
+    shown = [text]
+    peak = [0]
+
+    def apply():
+        try:
+            w = label.winfo_width() - pad
+        except tk.TclError:
+            return
+        if w <= 4:                      # 还没布局出来，等下一次 Configure
+            return
+        # 文字一变短，Label 自己也会跟着变窄，再拿变窄后的宽度去截就会
+        # 越截越短（实测能把「首页」截成空字符串）。用「见过的最大宽度」
+        # 当基准，把这个反馈环掐断；真正变窄时（折叠侧边栏）控件是重建的。
+        peak[0] = max(peak[0], w)
+        s = fit_text(text, fnt, peak[0])
+        if s != shown[0]:
+            shown[0] = s
+            label.configure(text=s)
+
+    label.bind("<Configure>", lambda e: apply())
+    label.after_idle(apply)
+    return label
+
+
 def center_window(win, w: int, h: int, parent=None) -> None:
     """把窗口放到父窗口（没有父窗口则屏幕）正中央，并保证不超出屏幕。
 
