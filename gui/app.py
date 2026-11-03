@@ -23,7 +23,7 @@ from gui.fonts import font
 from gui.tokens import (AVATAR, BTN_H, FS, NAV_H, NAV_H_MIN, NAV_H_SM,
                         NAV_ICON, NAV_ICON_SM, NAV_PAD, SIDEBAR_W,
                         SIDEBAR_W_MINI, SP, TEXT_PAD)
-from gui.pages import PAGE_BY_KEY, DesktopPage
+from gui.pages import PAGE_BY_KEY, DesktopPage, APP_VERSION
 from gui.navicons import IconLabel
 from gui.widgets import (center_window, fit_label, load_image_file, hline,
                          ModernButton, RoundedEntry)
@@ -318,30 +318,45 @@ class App(tk.Tk):
         self._nav_buttons()
 
     def _build_user_block(self):
-        """顶部用户信息：墨墨头像 + 当前用户名。"""
+        """顶部品牌区：墨墨头像 + 软件全名 + 版本 / 当前用户 / 已归类数。
+
+        软件名是第一眼的品牌信息，以前侧栏只有头像和用户名，名字压根没
+        露出来。现在头像在左、文字列在右：名字一行（完整显示）、版本和
+        用户信息两行小字。三行文字全部走 fit_label，栏宽不够时按像素截断
+        加省略号，不会出现半个字。
+        """
         c = self.C
         box = tk.Frame(self.sidebar, bg=c["sidebar_bg"])
         box.pack(fill="x", padx=SP["md"], pady=(SP["lg"], SP["sm"]))
         avatar = load_image_file(os.path.join(ASSETS, "momo-open.png"),
                                  AVATAR, self._photos)
+        if self.collapsed:
+            # 折叠态只留头像（居中），名字和版本放不下就不硬塞
+            if avatar is not None:
+                tk.Label(box, image=avatar, bg=c["sidebar_bg"]).pack(expand=True)
+            else:
+                tk.Label(box, text="🐙", bg=c["sidebar_bg"],
+                         font=font(FS["xl"])).pack(expand=True)
+            return
         if avatar is not None:
             tk.Label(box, image=avatar, bg=c["sidebar_bg"]).pack(
-                anchor="w" if not self.collapsed else "center")
+                side="left", anchor="n", padx=(SP["none"], SP["sm"]))
         else:
             tk.Label(box, text="🐙", bg=c["sidebar_bg"],
-                     font=font(FS["xl"])).pack()
-        if not self.collapsed:
-            user = os.environ.get("USERNAME") or os.environ.get("USER") or "本机用户"
-            # 用户名长短不一，fit_label 按实际宽度截断，不会顶出侧边栏
-            fit_label(tk.Label(box, text=user, bg=c["sidebar_bg"], fg=c["text"],
-                               font=font(FS["sm"], "bold"), anchor="w"),
-                      user, pad=TEXT_PAD).pack(
-                fill="x", pady=(SP["sm"], SP["none"]))
-            done = len(self.config_mgr.data.get("assignments", {}))
-            sub = f"已归类 {done} 项"
-            fit_label(tk.Label(box, text=sub, bg=c["sidebar_bg"],
-                               fg=c["sidebar_muted"], font=font(FS["xs"]),
-                               anchor="w"), sub, pad=TEXT_PAD).pack(fill="x")
+                     font=font(FS["xl"])).pack(side="left", anchor="n")
+
+        texts = tk.Frame(box, bg=c["sidebar_bg"])
+        texts.pack(side="left", fill="x", expand=True)
+        user = os.environ.get("USERNAME") or os.environ.get("USER") or "本机用户"
+        done = len(self.config_mgr.data.get("assignments", {}))
+        for text, color_key, size, weight in (
+                (APP_TITLE, "text", FS["sm"], "bold"),
+                (f"{APP_VERSION} · {user}", "sidebar_muted", FS["xs"], "normal"),
+                (f"已归类 {done} 项", "sidebar_muted", FS["xs"], "normal")):
+            lab = tk.Label(texts, text=text, bg=c["sidebar_bg"], fg=c[color_key],
+                           font=font(size, weight), anchor="w")
+            lab.pack(fill="x", expand=True)
+            fit_label(lab, text, pad=TEXT_PAD)
 
     # ---------------- 全局搜索 ----------------
     def _build_search(self):
@@ -430,13 +445,18 @@ class App(tk.Tk):
 
     # ---- 矮窗口下的导航密度 ----
     def _nav_metrics(self):
-        """(行高, 上下间距)：够高就用 NAV_H，不够就按比例压紧。"""
+        """(行高, 上下间距)：够高就用 NAV_H，不够就按比例压紧。
+
+        压到 NAV_H_MIN 还不够时不再裁掉后面的项——那比行矮更糟——而是
+        继续把行高压到「均分能拿到的值」，6 个导航项永远都看得见。
+        """
         avail = self._nav_frame.winfo_height()
         if avail <= 1:
             return NAV_H, SP["xs"]          # 还没布局出来，先用标准值
         per = avail / float(len(NAV_ITEMS))
         pad = int(min(SP["xs"], max(0, (per - NAV_H) / 2.0)))
-        h = int(max(NAV_H_MIN, min(NAV_H, per - 2 * pad)))
+        cap = per - 2 * pad
+        h = int(max(min(NAV_H_MIN, cap), min(NAV_H, cap)))
         return h, pad
 
     def _relayout_nav_if_needed(self):
