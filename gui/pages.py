@@ -8,6 +8,7 @@ import calendar
 import datetime as dt
 import os
 import tkinter as tk
+from tkinter import font as tkfont
 from tkinter import messagebox
 
 from core.scanner import scan_desktop, get_desktop_paths
@@ -21,8 +22,9 @@ from gui.theme import (DEFAULT_THEME, THEMES, THEME_NAMES, get_theme, style_menu
 from gui.fonts import font
 from gui.tokens import BAR_H, BTN_H_SM, FS, SP
 from gui.widgets import (open_target, make_photo, rounded_rect, short_name,
-                         center_window, dialog_header, hline, stat_bar, shrink,
-                         ModernButton, hover_card, ScrolledFrame)
+                         center_window, dialog_header, fit_text, hline,
+                         stat_bar, shrink, ModernButton, hover_card,
+                         ScrolledFrame)
 
 # ---- 磁贴尺寸（基准值；网格变宽时整体按倍率放大） ----
 TILE_SIZE = 96      # 磁贴基准宽度（px）
@@ -167,20 +169,22 @@ class CategoryWindow(tk.Toplevel):
 
         for idx, item in enumerate(items):
             icon = make_photo(icon_png(item.path, icon_size), self._photos)
+            # 名字按磁贴像素宽截断；不给 Button 传字符单位的 width/height
+            #（塞像素值会撑大内容画布，文字两边被裁），尺寸由 grid 槽位管
+            tname = fit_text(item.display_name,
+                             tkfont.Font(font=font(fs)),
+                             max(20, self.tile_w - 16))
             if icon:
                 btn = tk.Button(self.frame, image=icon,
-                                text=short_name(item.display_name),
+                                text=tname,
                                 compound="top", font=font(fs),
-                                width=self.tile_w, height=self.tile_h,
                                 relief="flat",
                                 bg=c["panel_bg"], fg=c["text"],
                                 activebackground=c["panel_active"],
                                 command=lambda p=item.path: open_target(p))
             else:
-                btn = tk.Button(self.frame, text=f"📄\n{short_name(item.display_name)}",
+                btn = tk.Button(self.frame, text=f"📄\n{tname}",
                                 font=font(fs),
-                                width=max(8, self.tile_w // 9),
-                                height=max(3, int(round(self.tile_h / 22.0))),
                                 relief="flat",
                                 bg=c["panel_bg"], fg=c["text"],
                                 activebackground=c["panel_active"],
@@ -817,7 +821,7 @@ class DesktopPage(BasePage):
                                              int(round(self.tile_font * 1.4))),
                                          "bold"))
 
-        label = tk.Label(frame, text=f"{short_name(category)} ({count})",
+        label = tk.Label(frame, text=f"{self._fit_tile_name(category)} ({count})",
                          bg=c["folder_bg"], fg=c["text"],
                          font=font(self.tile_font), cursor="hand2",
                          wraplength=self.tile_w - 10, justify="center")
@@ -844,18 +848,33 @@ class DesktopPage(BasePage):
             w.bind("<Enter>", enter)
             w.bind("<Leave>", leave)
 
+    def _fit_tile_name(self, name, fnt=None):
+        """磁贴名字按磁贴实际像素宽度截断（超长加省略号）。
+
+        short_name() 按字数截到 12：英文 12 个字符还很窄，可窗口宽、磁贴
+        被压小时 6 个汉字都放不下——名字比磁贴宽就被按钮硬裁掉两头。
+        这里跟着 self.tile_w 走，磁贴多宽名字就截到多宽。
+        """
+        if fnt is None:
+            fnt = tkfont.Font(font=font(self.tile_font))
+        return fit_text(name, fnt, max(20, self.tile_w - 16))
+
     def _make_item_tile(self, row, col, item):
         c = self.C
         slot = self._slot(row, col)
         shadow = self._shadow(slot)
-        name = short_name(item.display_name)
+        name = self._fit_tile_name(item.display_name)
         emoji = {"dir": "🗂", "shortcut": "🧩", "file": "📄"}.get(item.kind, "📄")
         # 先占位（emoji + 透明图保证尺寸稳定），真实图标由 _pump_icons 异步补上
         blank = tk.PhotoImage(width=self.icon_size, height=self.icon_size)
         self._photos.append(blank)
+        # 注意不要给 tk.Button 传 width/height：那两个参数的单位是「字符」，
+        # 塞像素值进去会把按钮的内容画布撑到巨大，place 只露出中间一条，
+        # 文字就在两边被裁掉（「Microsoft E…」变成「icrosoft E」）。显示
+        # 尺寸由下面 place 的像素参数决定，内容自适应、居中即可。
         btn = tk.Button(slot, image=blank, text=f"{emoji}\n{name}",
                         compound="top", font=font(self.tile_font),
-                        width=self.tile_w, height=self.tile_h, relief="flat",
+                        relief="flat",
                         bg=c["panel_bg"], fg=c["text"],
                         activebackground=c["panel_active"],
                         activeforeground=c["text"])
