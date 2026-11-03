@@ -12,7 +12,7 @@ import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from gui.tokens import BAR_H, FS, SP          # noqa: E402
+from gui.tokens import BAR_H, FS, SP, UI_SCALE, px   # noqa: E402
 from gui.pages import TILE_SIZE, TILE_PRESETS, tile_scale  # noqa: E402
 
 GUI_FILES = ["gui/pages.py", "gui/app.py", "gui/widgets.py", "gui/pet.py"]
@@ -44,7 +44,7 @@ class TokenTest(unittest.TestCase):
     def test_scales_are_finite(self):
         self.assertLessEqual(len(SP), 8)
         self.assertLessEqual(len(FS), 8)
-        self.assertEqual(BAR_H, 10)
+        self.assertEqual(BAR_H, px(10))
         self.assertGreaterEqual(min(FS.values()), 10)   # 可读下限
 
 

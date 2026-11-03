@@ -22,19 +22,21 @@ from gui.theme import DEFAULT_THEME, THEMES, THEME_NAMES, get_theme
 from gui.fonts import font
 from gui.tokens import (AVATAR, BTN_H, FS, NAV_H, NAV_H_MIN, NAV_H_SM,
                         NAV_ICON, NAV_ICON_SM, NAV_PAD, SIDEBAR_W,
-                        SIDEBAR_W_MINI, SP, TEXT_PAD)
+                        SIDEBAR_W_MINI, SP, TEXT_PAD, TOPBAR_H, px)
 from gui.pages import PAGE_BY_KEY, DesktopPage, APP_VERSION
 from gui.navicons import IconLabel
 from gui.widgets import (center_window, fit_label, load_image_file, hline,
                          ModernButton, RoundedEntry)
 
 APP_TITLE = "墨墨桌面管理助手"
-WIN_W, WIN_H = 1120, 700
-MIN_W, MIN_H = 560, 420        # 能缩到的最小尺寸（和普通软件一样可以缩得很小）
+# 窗口尺寸也随 DPI 缩放：字体在高分屏上被 Tk 放大，窗口、下限不同步的话
+# 内容根本装不下（v1.9 里侧栏文字被截，就是容器没跟着字走）
+WIN_W, WIN_H = px(1120), px(700)
+MIN_W, MIN_H = px(560), px(420)   # 能缩到的最小尺寸（和普通软件一样可以缩得很小）
 # 窄到这个宽度就自动收起侧边栏，把宽度让给内容区：阈值取「内容区至少还剩
-# MIN_W」——栏加宽到 240 后 780 会留下 540 的内容区，反而不如收起侧栏。
-AUTO_COLLAPSE_W = MIN_W + SIDEBAR_W     # 800
-NARROW_W = 700                 # 再窄就藏起标题条里的副标题
+# MIN_W」——栏加宽后 780 会留下过窄的内容区，反而不如收起侧栏。
+AUTO_COLLAPSE_W = MIN_W + SIDEBAR_W
+NARROW_W = px(700)                # 再窄就藏起标题条里的副标题
 
 ASSETS = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                       "assets")
@@ -280,7 +282,7 @@ class App(tk.Tk):
         self.main = tk.Frame(self, bg=self.C["app_bg"])
         self.main.pack(side="left", fill="both", expand=True)
 
-        topbar = tk.Frame(self.main, bg=self.C["topbar_bg"], height=64)
+        topbar = tk.Frame(self.main, bg=self.C["topbar_bg"], height=TOPBAR_H)
         topbar.pack(fill="x")
         topbar.pack_propagate(False)
         self.page_title = tk.Label(topbar, text="", bg=self.C["topbar_bg"],
@@ -494,7 +496,7 @@ class App(tk.Tk):
         if active and not self.collapsed:
             tk.Frame(inner, bg=c["accent"], width=3).pack(
                 side="left", fill="y", padx=(SP["none"], SP["sm"]))
-        ic = IconLabel(inner, icon, min(NAV_ICON, max(14, h - 8)), icon_fg,
+        ic = IconLabel(inner, icon, min(NAV_ICON, max(px(14), h - px(8))), icon_fg,
                        bg=bg)
         if self.collapsed:
             ic.place(relx=0.5, rely=0.5, anchor="center")

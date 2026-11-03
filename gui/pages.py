@@ -20,26 +20,27 @@ from core.undo import UndoStack
 from gui import category_ops
 from gui.theme import (DEFAULT_THEME, THEMES, THEME_NAMES, get_theme, style_menu)
 from gui.fonts import font
-from gui.tokens import BAR_H, BTN_H_SM, FS, SP
+from gui.tokens import BAR_H, BTN_H_SM, FS, SP, px
 from gui.widgets import (open_target, make_photo, rounded_rect, short_name,
                          center_window, dialog_header, fit_text, hline,
                          stat_bar, shrink, ModernButton, hover_card,
                          ScrolledFrame)
 
 # ---- 磁贴尺寸（基准值；网格变宽时整体按倍率放大） ----
-TILE_SIZE = 96      # 磁贴基准宽度（px）
-TILE_H = 108        # 磁贴基准高度（px）（磁贴统一尺寸，hover 放大不会推挤邻居）
+# 全部过 px()：高 DPI 下 Tk 把字号放大了，磁贴 / 图标不同步的话文字装不下
+TILE_SIZE = px(96)      # 磁贴基准宽度（px）
+TILE_H = px(108)        # 磁贴基准高度（px）（磁贴统一尺寸，hover 放大不会推挤邻居）
 COLS = 8            # 默认每行数量（窗口宽度变化时会自适应）
 MIN_COLS = 4        # 每行最少数量
 MAX_COLS = 16       # 每行最多数量（窗口放大时自动增加）
-TILE_PADX = 8
-TILE_PADY = 8
-ICON_SIZE = 48      # 磁贴图标基准尺寸（px）
+TILE_PADX = px(8)
+TILE_PADY = px(8)
+ICON_SIZE = px(48)      # 磁贴图标基准尺寸（px）
 ICONS_PER_TICK = 6  # 每帧最多提取几个系统图标（懒加载，防止首屏卡顿）
-TILE_HOVER = 6      # 鼠标悬停时磁贴放大的像素数
+TILE_HOVER = px(6)      # 鼠标悬停时磁贴放大的像素数
 
 # 自适应缩放：窗口放大时磁贴跟着长大（以前只加列数，磁贴永远 96px）
-REF_GRID_W = 640        # 基准网格宽度：这个宽度下磁贴正好是基准尺寸
+REF_GRID_W = px(640)    # 基准网格宽度：这个宽度下磁贴正好是基准尺寸
 TILE_SCALE_POW = 0.75   # 宽度→倍率曲线：1.0=完全线性，越小越偏向「多排几列」
 TILE_GROW = 1.75        # 磁贴最大放大倍率（顶到上限后就只加列、不再变大）
 TILE_SHRINK = 0.72      # 窗口缩到最小时磁贴的最小倍率（再小就看不清图标了）
@@ -60,16 +61,16 @@ def tile_scale(width: int) -> float:
     return max(TILE_SHRINK, min(TILE_GROW, s))
 
 # ---- 分类文件夹窗口内的卡片 ----
-CAT_TILE_W = 90         # 卡片基准宽度（px）
-CAT_TILE_H = 86         # 卡片基准高度（px）
+CAT_TILE_W = px(90)         # 卡片基准宽度（px）
+CAT_TILE_H = px(86)         # 卡片基准高度（px）
 CAT_COLS = 8            # 基准列数
 CAT_MIN_COLS = 3
 CAT_MAX_COLS = 12
 
 # ---- 分类文件夹 3×3 预览 ----
-FOLDER_PREVIEW = 70
-PREVIEW_ICON = 20
-PREVIEW_GAP = 2
+FOLDER_PREVIEW = px(70)
+PREVIEW_ICON = px(20)
+PREVIEW_GAP = px(2)
 PREVIEW_PAD = 3
 PREVIEW_COLS = 3
 MAX_PREVIEW = PREVIEW_COLS ** 2
@@ -106,8 +107,8 @@ class CategoryWindow(tk.Toplevel):
         except tk.TclError:
             pass
         center_window(self,
-                      max(560, min(1100, int(mw * 0.72) if mw else 560)),
-                      max(400, min(820, int(mh * 0.78) if mh else 400)),
+                      max(px(560), min(px(1100), int(mw * 0.72) if mw else px(560))),
+                      max(px(400), min(px(820), int(mh * 0.78) if mh else px(400))),
                       master)
 
         self.head = tk.Label(self, text="", font=font(FS["lg"], "bold"),
@@ -173,7 +174,7 @@ class CategoryWindow(tk.Toplevel):
             #（塞像素值会撑大内容画布，文字两边被裁），尺寸由 grid 槽位管
             tname = fit_text(item.display_name,
                              tkfont.Font(font=font(fs)),
-                             max(20, self.tile_w - 16))
+                             max(px(20), self.tile_w - px(16)))
             if icon:
                 btn = tk.Button(self.frame, image=icon,
                                 text=tname,
@@ -824,7 +825,7 @@ class DesktopPage(BasePage):
         label = tk.Label(frame, text=f"{self._fit_tile_name(category)} ({count})",
                          bg=c["folder_bg"], fg=c["text"],
                          font=font(self.tile_font), cursor="hand2",
-                         wraplength=self.tile_w - 10, justify="center")
+                         wraplength=self.tile_w - px(10), justify="center")
         label.pack(pady=(SP["xs"], SP["none"]))
 
         menu = tk.Menu(frame, tearoff=0)
@@ -857,7 +858,7 @@ class DesktopPage(BasePage):
         """
         if fnt is None:
             fnt = tkfont.Font(font=font(self.tile_font))
-        return fit_text(name, fnt, max(20, self.tile_w - 16))
+        return fit_text(name, fnt, max(px(20), self.tile_w - px(16)))
 
     def _make_item_tile(self, row, col, item):
         c = self.C
@@ -988,7 +989,7 @@ class DesktopPage(BasePage):
         win = tk.Toplevel(self.app)
         win.title("管理分类")
         win.transient(self.app)
-        center_window(win, 330, 380, self.app)
+        center_window(win, px(330), px(380), self.app)
         win.configure(bg=c["dialog_bg"])
         win.resizable(False, False)
         win.grab_set()
@@ -1257,8 +1258,8 @@ class SystemPage(BasePage):
     subtitle = "CPU 占用率、内存剩余与实时网速"
     INTERVAL = 1000        # 刷新间隔（毫秒）
     HISTORY = 60           # 折线图保留的采样点数
-    GRAPH_H = 130          # 折线图最小高度
-    GRAPH_MAX_H = 300      # 折线图最高长到这个高度（窗口再高也不继续拉）
+    GRAPH_H = px(130)          # 折线图最小高度
+    GRAPH_MAX_H = px(300)      # 折线图最高长到这个高度（窗口再高也不继续拉）
     METER_W = 210          # 卡片内进度条宽度
 
     def _build(self):
@@ -1414,7 +1415,7 @@ class SystemPage(BasePage):
         h = max(self.GRAPH_H, cv.winfo_height())
         cv.configure(width=w)
         cv.delete("all")
-        pad_l, pad_r, pad_t, pad_b = 56, 14, 14, 20
+        pad_l, pad_r, pad_t, pad_b = px(56), px(14), px(14), px(20)
         y0, y1 = pad_t, h - pad_b
         span = y1 - y0
         # 网格线 + 刻度：文字右缘距绘图区 10px，完整落在画布内
@@ -1461,7 +1462,7 @@ class SystemPage(BasePage):
 class CountdownDialog(tk.Toplevel):
     """新建 / 编辑一条倒计时的弹窗。"""
 
-    WIDTH, HEIGHT = 430, 330
+    WIDTH, HEIGHT = px(430), px(330)
 
     def __init__(self, master, theme, item=None, on_save=None):
         super().__init__(master)
@@ -1646,7 +1647,7 @@ POMO_PRESETS = (15, 25, 45, 60, 90)   # 常用专注时长（分钟）
 class PomodoroDialog(tk.Toplevel):
     """🍅 番茄钟：自定义专注时长 / 休息时长（滚轮选择）。"""
 
-    W, H = 400, 300
+    W, H = px(400), px(300)
 
     def __init__(self, master, app, on_start=None):
         super().__init__(master)
@@ -1763,7 +1764,7 @@ class PomodoroDialog(tk.Toplevel):
 class HotkeyDialog(tk.Toplevel):
     """按下组合键即可设定全局热键（Ctrl / Alt / Shift + 任意键）。"""
 
-    W, H = 380, 230
+    W, H = px(380), px(230)
 
     def __init__(self, master, app, on_save=None):
         super().__init__(master)

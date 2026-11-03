@@ -15,7 +15,7 @@ from tkinter import messagebox
 
 from gui.navicons import ICONS, IconLabel, draw_icon
 from gui import fonts
-from gui.tokens import BAR_H, BTN_H_LG, BTN_PAD, FS, SP
+from gui.tokens import BAR_H, BTN_H_LG, BTN_PAD, FS, SP, px
 
 
 # ---- 颜色小工具（渐变按钮用）----
@@ -202,11 +202,11 @@ class ModernButton(tk.Canvas):
     """
 
     FONT_SIZE = 11      # 字体族由 gui/fonts 在运行时解析（不在 import 时定死）
-    ICON_GAP = 7
+    ICON_GAP = px(7)
 
     def __init__(self, master, text="", command=None, c=None, primary=False,
                  icon=None, height=BTN_H_LG, padx=BTN_PAD, font=None,
-                 icon_size=18, bg=None):
+                 icon_size=px(18), bg=None):
         c = dict(c or {})
         self.c = c
         # 胶囊边缘抗锯齿要往「所在底色」上混：放在卡片里就得用 card_bg，
@@ -409,7 +409,7 @@ class ModernButton(tk.Canvas):
 class RoundedEntry(tk.Canvas):
     """圆角搜索框：胶囊底 + 线性放大镜图标 + 输入框 + 清除按钮。"""
 
-    def __init__(self, master, c, textvariable=None, height=34, icon="search",
+    def __init__(self, master, c, textvariable=None, height=px(34), icon="search",
                  on_clear=None, on_return=None, on_escape=None):
         c = dict(c or {})
         self.c = c
@@ -427,8 +427,8 @@ class RoundedEntry(tk.Canvas):
                               font=fonts.font(FS["xs"]),
                               selectbackground=c.get("accent", "#4b6bfb"),
                               selectforeground=c.get("accent_fg", "#ffffff"))
-        self.ic = IconLabel(self, icon, 16, c.get("nav_icon", "#5a6478"), bg=bg)
-        self.clr = IconLabel(self, "close", 13, c.get("nav_icon", "#5a6478"), bg=bg)
+        self.ic = IconLabel(self, icon, px(16), c.get("nav_icon", "#5a6478"), bg=bg)
+        self.clr = IconLabel(self, "close", px(13), c.get("nav_icon", "#5a6478"), bg=bg)
         self.clr.bind("<Button-1>", lambda e: self._clear())
         if on_return is not None:
             self.entry.bind("<Return>", on_return)
@@ -446,9 +446,10 @@ class RoundedEntry(tk.Canvas):
         rounded_rect(self, 0, 0, w, h, r=h / 2.0,
                      fill=self.c.get("search_bg", "#f2f5fb"),
                      outline=self.c.get("divider", "#e6e9f0"), tags="bg")
-        self.ic.place(x=11, y=(h - 16) // 2)
-        self.clr.place(x=w - 24, y=(h - 13) // 2)
-        self.entry.place(x=34, y=5, width=max(10, w - 34 - 26), height=h - 10)
+        self.ic.place(x=px(11), y=(h - px(16)) // 2)
+        self.clr.place(x=w - px(24), y=(h - px(13)) // 2)
+        self.entry.place(x=px(34), y=px(5),
+                         width=max(px(10), w - px(34) - px(26)), height=h - px(10))
 
     def _clear(self):
         self.var.set("")
