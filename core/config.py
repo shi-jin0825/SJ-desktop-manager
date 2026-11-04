@@ -32,6 +32,9 @@ DEFAULT_CONFIG = {
                  "pomodoro_break": 5},
     # 专属倒计时（倒数日）：[{id, title, date, note, repeat, created}]
     "countdowns": [],
+    # 日程计划（时间管理页）：[{id, title, date, note, done, done_at, created}]
+    # date 可为空 = 不限日期的待办；done_at 记录勾选完成的日期
+    "plans": [],
     # 归类 key 方案版本（用于旧配置自动迁移）
     "assign_key_version": ASSIGN_KEY_VERSION,
 }
@@ -332,5 +335,65 @@ class ConfigManager:
     def get_countdown(self, cid: str):
         for item in self.countdowns:
             if item.get("id") == cid:
+                return item
+        return None
+
+    # ---- 日程计划（时间管理）----
+    @property
+    def plans(self) -> list:
+        return self.data["plans"]
+
+    def add_plan(self, title: str, date: str = "", note: str = "") -> str:
+        """新增一条日程计划，返回它的 id。"""
+        pid = "pl%d" % int(time.time() * 1000)
+        while any(p.get("id") == pid for p in self.plans):
+            pid += "x"
+        self.plans.append({
+            "id": pid,
+            "title": title.strip(),
+            "date": date or "",
+            "note": (note or "").strip(),
+            "done": False,
+            "done_at": "",
+            "created": time.strftime("%Y-%m-%d"),
+        })
+        self.save()
+        return pid
+
+    def update_plan(self, pid: str, **fields) -> bool:
+        """更新一条计划：title / date / note 文本字段，done 布尔。
+
+        done 由 False 翻成 True 时自动记 done_at（今天），方便之后
+        按完成时间排序；反向（重做）时清空。
+        """
+        for item in self.plans:
+            if item.get("id") == pid:
+                for key, val in fields.items():
+                    if key in ("title", "note"):
+                        item[key] = (val or "").strip()
+                    elif key == "date":
+                        item[key] = val or ""
+                    elif key == "done":
+                        was = bool(item.get("done"))
+                        item[key] = bool(val)
+                        if item[key] and not was:
+                            item["done_at"] = time.strftime("%Y-%m-%d")
+                        elif was and not item[key]:
+                            item["done_at"] = ""
+                self.save()
+                return True
+        return False
+
+    def remove_plan(self, pid: str) -> bool:
+        for i, item in enumerate(self.plans):
+            if item.get("id") == pid:
+                self.plans.pop(i)
+                self.save()
+                return True
+        return False
+
+    def get_plan(self, pid: str):
+        for item in self.plans:
+            if item.get("id") == pid:
                 return item
         return None

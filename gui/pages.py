@@ -76,7 +76,7 @@ MAX_PREVIEW = PREVIEW_COLS ** 2
 
 UNDO_DEPTH = 10         # 「撤销上一步」最多记住几步整理操作
 
-APP_VERSION = "v1.11"      # 设置页「关于」显示；发版时跟着更新日志一起改
+APP_VERSION = "v1.12"      # 设置页「关于」显示；发版时跟着更新日志一起改
 KIND_LABEL = {"shortcut": "快捷方式", "dir": "文件夹", "file": "文件"}
 
 
@@ -1249,7 +1249,7 @@ class StatsPage(BasePage):
 
 
 # ======================================================================
-# 4. 专属倒计时（倒数日）
+# 4. 时间管理：日程计划 + 倒数日
 # ======================================================================
 class CountdownDialog(tk.Toplevel):
     """新建 / 编辑一条倒计时的弹窗。"""
@@ -1429,6 +1429,209 @@ class CountdownDialog(tk.Toplevel):
             self.on_save({"title": title, "date": cd.fmt_date(d),
                           "note": self.var_note.get(),
                           "repeat": self.var_repeat.get()})
+        self.destroy()
+
+
+# ---- 日程计划 ----
+class PlanDialog(tk.Toplevel):
+    """新建 / 编辑一条日程计划的弹窗。
+
+    和倒计时弹窗同构，差别只在两点：
+      · 日期可空——勾选「不限定日期」后这条就是随时可做的待办；
+      · 不编辑完成状态（完成 / 重做在卡片勾选框上直接点）。
+    """
+
+    WIDTH, HEIGHT = px(430), px(380)
+
+    def __init__(self, master, theme, item=None, on_save=None):
+        super().__init__(master)
+        c = theme
+        self.C = c
+        self.item = item or {}
+        self.on_save = on_save
+        self.title("编辑计划" if item else "新建计划")
+        center_window(self, self.WIDTH, self.HEIGHT, master)
+        self.configure(bg=c["dialog_bg"])
+        self.transient(master)
+        self.grab_set()
+
+        dialog_header(self, c, self.title(),
+                      "给自己排一件事：定个日子，做完打个勾")
+
+        form = tk.Frame(self, bg=c["dialog_bg"])
+        form.pack(fill="x", padx=SP["xl"])
+
+        self.var_title = tk.StringVar(value=self.item.get("title", ""))
+        self.var_note = tk.StringVar(value=self.item.get("note", ""))
+        # 新建默认定在今天（滚轮已就位）；编辑时按原数据（无日期的待办保持勾选）
+        self.var_nodate = tk.BooleanVar(
+            value=bool(self.item.get("id")) and not bool(self.item.get("date")))
+
+        self._row(form, "内容", self.var_title, 0)
+        self._date_row(form, 1)
+        self._row(form, "备注", self.var_note, 3)
+
+        tk.Checkbutton(self, text="不限定日期（随时可做的待办）",
+                       variable=self.var_nodate,
+                       command=self._sync_nodate,
+                       font=font(FS["xs"]),
+                       bg=c["dialog_bg"], fg=c["text"],
+                       selectcolor=c["panel_bg"],
+                       activebackground=c["dialog_bg"],
+                       activeforeground=c["text"],
+                       highlightthickness=0, bd=0).pack(
+            anchor="w", padx=SP["xl"], pady=(SP["sm"], SP["none"]))
+
+        btns = tk.Frame(self, bg=c["dialog_bg"])
+        btns.pack(pady=SP["lg"])
+        ModernButton(btns, text="保存", command=self._save, c=c, primary=True,
+                     bg=c["dialog_bg"]).pack(side="left", padx=SP["sm"])
+        ModernButton(btns, text="取消", command=self.destroy, c=c,
+                     bg=c["dialog_bg"]).pack(side="left", padx=SP["sm"])
+
+        self.bind("<Return>", lambda e: self._save())
+        self.bind("<Escape>", lambda e: self.destroy())
+
+    # 表单行与倒计时弹窗同款
+    def _row(self, parent, label, var, row):
+        c = self.C
+        tk.Label(parent, text=label, width=5, anchor="w",
+                 bg=c["dialog_bg"], fg=c["sidebar_muted"],
+                 font=font(FS["sm"])).grid(row=row, column=0, pady=SP["sm"])
+        tk.Entry(parent, textvariable=var,
+                 font=font(FS["sm"]), relief="flat",
+                 bg=c["panel_bg"], fg=c["text"],
+                 insertbackground=c["text"],
+                 highlightthickness=1,
+                 highlightbackground=c["divider"]).grid(
+            row=row, column=1, sticky="ew", pady=SP["sm"],
+            padx=(SP["sm"], SP["none"]))
+        parent.grid_columnconfigure(1, weight=1)
+
+    def _date_row(self, parent, row):
+        """年 / 月 / 日滚轮（默认今天或已有日期），实时显示星期与倒计时。"""
+        c = self.C
+        tk.Label(parent, text="日期", width=5, anchor="w",
+                 bg=c["dialog_bg"], fg=c["sidebar_muted"],
+                 font=font(FS["sm"])).grid(row=row, column=0, pady=SP["sm"])
+        self._date_cell = tk.Frame(parent, bg=c["dialog_bg"])
+        self._date_cell.grid(row=row, column=1, sticky="ew", pady=SP["sm"],
+                             padx=(SP["sm"], SP["none"]))
+
+        today = cd.today()
+        cur = cd.parse_date(self.item.get("date")) or today
+
+        kw = dict(font=font(FS["sm"]), width=5, justify="center",
+                  relief="flat", bd=0, bg=c["panel_bg"], fg=c["text"],
+                  buttonbackground=c["panel_bg"],
+                  insertbackground=c["text"],
+                  highlightthickness=1,
+                  highlightbackground=c["divider"],
+                  highlightcolor=c["accent"])
+
+        self.var_y = tk.StringVar(value=str(cur.year))
+        self.var_m = tk.StringVar(value=str(cur.month))
+        self.var_d = tk.StringVar(value=str(cur.day))
+        self.spin_y = tk.Spinbox(self._date_cell, from_=1970,
+                                 to=today.year + 60,
+                                 textvariable=self.var_y, **kw)
+        self.spin_m = tk.Spinbox(self._date_cell, from_=1, to=12, wrap=True,
+                                 textvariable=self.var_m, **kw)
+        self.spin_d = tk.Spinbox(self._date_cell, from_=1, to=31, wrap=True,
+                                 textvariable=self.var_d, **kw)
+        # 三个滚轮都建好后才挂监听，否则构造 spinbox 时会提前触发回调
+        for v in (self.var_y, self.var_m, self.var_d):
+            v.trace_add("write", self._sync_date)
+
+        self.spin_y.pack(side="left")
+        tk.Label(self._date_cell, text="年", bg=c["dialog_bg"],
+                 fg=c["sidebar_muted"],
+                 font=font(FS["xs"])).pack(side="left",
+                                          padx=(SP["xs"], SP["sm"]))
+        self.spin_m.pack(side="left")
+        tk.Label(self._date_cell, text="月", bg=c["dialog_bg"],
+                 fg=c["sidebar_muted"],
+                 font=font(FS["xs"])).pack(side="left",
+                                          padx=(SP["xs"], SP["sm"]))
+        self.spin_d.pack(side="left")
+        tk.Label(self._date_cell, text="日", bg=c["dialog_bg"],
+                 fg=c["sidebar_muted"],
+                 font=font(FS["xs"])).pack(side="left",
+                                          padx=(SP["xs"], SP["sm"]))
+
+        self._week_label = tk.Label(parent, text="", bg=c["dialog_bg"],
+                                    fg=c["sidebar_muted"],
+                                    font=font(FS["xs"]))
+        self._week_label.grid(row=row + 1, column=1, sticky="w",
+                              padx=(SP["sm"], SP["none"]))
+        self._sync_date()
+        self._sync_nodate()
+
+    def _sync_nodate(self):
+        """「不限定日期」勾选后禁用滚轮并收起星期提示。"""
+        state = "disabled" if self.var_nodate.get() else "normal"
+        for sp in (self.spin_y, self.spin_m, self.spin_d):
+            sp.config(state=state)
+        if self.var_nodate.get():
+            self._week_label.config(text="不限日期 · 随时可做")
+        else:
+            self._sync_date()
+
+    def _sync_date(self, *_):
+        """滚轮变化时重算：天数上限、纠正越界、同步星期与倒计时文案。"""
+        if not hasattr(self, "spin_d"):
+            return
+        try:
+            y = int(float(self.var_y.get()))
+            m = int(float(self.var_m.get()))
+            d = int(float(self.var_d.get()))
+        except (ValueError, tk.TclError):
+            return
+        try:
+            y_max = int(float(self.spin_y.cget("to")))
+        except (TypeError, ValueError):
+            y_max = 9999
+        y = max(1970, min(y_max, y))
+        m = max(1, min(12, m))
+        last = calendar.monthrange(y, m)[1]
+        self.spin_d.config(to=last)
+        if d > last:
+            d = last
+            self.var_d.set(str(d))
+        elif d < 1:
+            d = 1
+            self.var_d.set(str(d))
+        try:
+            date = dt.date(y, m, d)
+        except ValueError:
+            return
+        self._week_label.config(
+            text=f"{cd.weekday_cn(date)} · 还有 "
+                 f"{cd.days_until(date, cd.today())} 天"
+                 if date > cd.today()
+                 else (cd.weekday_cn(date) + " · 就是今天"
+                       if date == cd.today()
+                       else cd.weekday_cn(date)))
+
+    def _save(self):
+        title = self.var_title.get().strip()
+        if not title:
+            messagebox.showwarning("提示", "请填写计划内容", parent=self)
+            return
+        if self.var_nodate.get():
+            date = ""
+        else:
+            d = cd.parse_date("-".join((self.var_y.get(),
+                                        self.var_m.get(),
+                                        self.var_d.get())))
+            if d is None:
+                messagebox.showwarning("提示", "日期无效，请重新选择",
+                                       parent=self)
+                return
+            date = cd.fmt_date(d)
+        if self.on_save:
+            self.on_save({"title": title, "date": date,
+                          "note": self.var_note.get()})
         self.destroy()
 
 
@@ -1633,9 +1836,9 @@ class HotkeyDialog(tk.Toplevel):
 
 
 class CountdownPage(BasePage):
-    key = "countdowns"
-    title = "专属倒计时"
-    subtitle = "倒数日：记住每一个重要的日子"
+    key = "countdowns"            # 历史遗留 key，改名后不动（config 兼容）
+    title = "时间管理"
+    subtitle = "日程计划 + 倒数日：安排要做的事，记住重要的日子"
     REFRESH_MS = 60000        # 每分钟刷新一次，过零点后自动更新
 
     def __init__(self, master, app):
@@ -1643,9 +1846,9 @@ class CountdownPage(BasePage):
         super().__init__(master, app)
 
     def _build(self):
-        c = self.C
-        self._toolbar([("calendar", "新建倒计时", self._add),
-                       ("clock", "开始番茄钟", self._start_pomo),
+        self._toolbar([("calendar", "新建计划", self._add_plan),
+                       ("clock", "新建倒计时", self._add),
+                       ("grid", "开始番茄钟", self._start_pomo),
                        ("close", "结束番茄钟", self._stop_pomo),
                        ("refresh", "刷新", self.refresh)])
         self.body = self._scroll_body().body
@@ -1695,20 +1898,151 @@ class CountdownPage(BasePage):
         c = self.C
         for w in self.body.winfo_children():
             w.destroy()
+        plans = sorted(self.cfg.plans, key=cd.plan_sort_key)
         items = sorted(self.cfg.countdowns, key=cd.sort_key)
 
-        if not items:
-            box = tk.Frame(self.body, bg=c["app_bg"])
-            box.pack(pady=SP["xxl"])
-            tk.Label(box, text="⏳", bg=c["app_bg"], fg=c["text"],
-                     font=font(FS["hero"])).pack()
-            tk.Label(box, text="还没有倒计时", bg=c["app_bg"], fg=c["text"],
-                     font=font(FS["md"], "bold")).pack(pady=(SP["sm"], SP["xs"]))
-            tk.Label(box, text="点上方工具栏的「新建倒计时」记下第一个重要的日子\n"
-                              "（考试、生日、发工资、假期…）",
+        self._plan_section(plans)
+        hline(self.body, c["divider"], pady=(SP["lg"], SP["xs"]))
+        self._countdown_section(items)
+
+        todo = sum(1 for p in plans if not p.get("done"))
+        parts = []
+        if plans:
+            parts.append(f"{todo} 个待办 / 共 {len(plans)} 个计划")
+        if items:
+            parts.append(f"{len(items)} 个倒数日")
+        self.app.update_topbar(" · ".join(parts) if parts else "时间管理")
+
+    # ---- 日程计划 ----
+    def _section_title(self, text):
+        """区块小标题（日程计划 / 倒数日两段的共同样式）。"""
+        tk.Label(self.body, text=text, bg=self.C["app_bg"],
+                 fg=self.C["sidebar_muted"], font=font(FS["sm"], "bold"),
+                 anchor="w").pack(fill="x", pady=(SP["sm"], SP["xs"]))
+
+    def _plan_section(self, plans):
+        c = self.C
+        self._section_title("📋 日程计划")
+        if not plans:
+            tk.Label(self.body, text="还没有计划 · 点上方「新建计划」排第一件事",
                      bg=c["app_bg"], fg=c["sidebar_muted"],
-                     font=font(FS["xs"]), justify="center").pack()
-            self.app.update_topbar("暂无倒计时")
+                     font=font(FS["xs"])).pack(anchor="w",
+                                               pady=(SP["none"], SP["sm"]))
+            return
+        for item in plans:
+            self._plan_card(item)
+
+    def _plan_card(self, item):
+        c = self.C
+        done = bool(item.get("done"))
+        card = tk.Frame(self.body, bg=c["card_bg"], highlightthickness=1,
+                        highlightbackground=c["divider"], padx=SP["lg"], pady=SP["md"])
+        card.pack(fill="x", pady=SP["xs"])
+
+        self._check_box(card, item).pack(side="left", anchor="n",
+                                         padx=(SP["none"], SP["md"]))
+
+        mid = tk.Frame(card, bg=c["card_bg"])
+        mid.pack(side="left", fill="both", expand=True)
+        fg = c["sidebar_muted"] if done else c["text"]
+        styles = ("bold", "overstrike") if done else ("bold",)
+        title_lab = tk.Label(mid, text=item.get("title", ""), bg=c["card_bg"],
+                             fg=fg, font=font(FS["md"], *styles), anchor="w")
+        title_lab.pack(fill="x")
+        tk.Label(mid, text=self._plan_date_text(item), bg=c["card_bg"],
+                 fg=c["sidebar_muted"], font=font(FS["xs"]),
+                 anchor="w").pack(fill="x")
+        if item.get("note"):
+            note_lab = tk.Label(mid, text=item["note"], bg=c["card_bg"],
+                                fg=c["sidebar_muted"], font=font(FS["xs"]),
+                                anchor="w", justify="left")
+            note_lab.pack(fill="x")
+            note_lab.bind("<Configure>", lambda e, l=note_lab:
+                          l.configure(wraplength=max(px(80), e.width - SP["sm"])))
+        title_lab.bind("<Configure>", lambda e, l=title_lab:
+                       l.configure(wraplength=max(px(80), e.width - SP["sm"])))
+
+        pid = item.get("id")
+        acts = (("编辑", lambda pid=pid: self._edit_plan(pid)),
+                ("删除", lambda pid=pid: self._delete_plan(pid), True))
+        self._card_buttons(card, acts)
+
+    def _check_box(self, parent, item):
+        """自绘勾选框（原生 Checkbutton 的主题适配太丑）：点一下完成 / 重做。"""
+        c = self.C
+        s = px(20)
+        cv = tk.Canvas(parent, width=s, height=s, bg=c["card_bg"],
+                       highlightthickness=0, cursor="hand2")
+
+        def draw():
+            cv.delete("all")
+            r = max(px(4), s // 5)
+            if item.get("done"):
+                rounded_rect(cv, 1, 1, s - 1, s - 1, r, fill=c["accent"],
+                             outline="")
+                cv.create_line(s * 0.26, s * 0.52, s * 0.44, s * 0.70,
+                               s * 0.74, s * 0.30, fill="white",
+                               width=max(2, px(2)), capstyle="round",
+                               joinstyle="round", smooth=True)
+            else:
+                rounded_rect(cv, 1, 1, s - 1, s - 1, r, fill=c["panel_bg"],
+                             outline=c["divider"], width=1)
+
+        def toggle(_=None):
+            self.cfg.update_plan(item.get("id"), done=not item.get("done"))
+            self.refresh()
+
+        draw()
+        cv.bind("<Button-1>", toggle)
+        return cv
+
+    @staticmethod
+    def _plan_date_text(item) -> str:
+        info = cd.plan_describe(item)
+        if info["state"] == "nodate":
+            return info["text"]
+        when = cd.weekday_cn(info["target"])
+        return f"{cd.fmt_date(info['target'])} {when} · {info['text']}"
+
+    # ---- 计划的增删改 ----
+    def _add_plan(self):
+        PlanDialog(self.app, self.C,
+                   on_save=lambda data: self._save_plan(None, data))
+
+    def _edit_plan(self, pid):
+        item = self.cfg.get_plan(pid)
+        if item is None:
+            return
+        PlanDialog(self.app, self.C, item=item,
+                   on_save=lambda data: self._save_plan(pid, data))
+
+    def _save_plan(self, pid, data):
+        if pid:
+            self.cfg.update_plan(pid, **data)
+        else:
+            self.cfg.add_plan(**data)
+        self.refresh()
+
+    def _delete_plan(self, pid):
+        item = self.cfg.get_plan(pid)
+        if item is None:
+            return
+        if messagebox.askyesno("删除计划",
+                               f"删除计划「{item.get('title', '')}」？",
+                               parent=self.app):
+            self.cfg.remove_plan(pid)
+            self.refresh()
+
+    # ---- 倒数日 ----
+    def _countdown_section(self, items):
+        c = self.C
+        self._section_title("⏳ 倒数日")
+        if not items:
+            tk.Label(self.body, text="还没有倒数日 · 点上方「新建倒计时」"
+                                     "记住一个重要的日子",
+                     bg=c["app_bg"], fg=c["sidebar_muted"],
+                     font=font(FS["xs"])).pack(anchor="w",
+                                               pady=(SP["none"], SP["sm"]))
             return
 
         # 置顶焦点：最近的一个日子
@@ -1720,8 +2054,6 @@ class CountdownPage(BasePage):
             rest = items
         for item in rest:
             self._card(item)
-        self.app.update_topbar(f"{len(items)} 个倒计时 · "
-                               f"最近：{head.get('title', '')}")
 
     # ---- 卡片 ----
     def _focus_card(self, item):

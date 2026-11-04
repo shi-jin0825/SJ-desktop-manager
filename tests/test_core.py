@@ -77,6 +77,34 @@ class CountdownTest(unittest.TestCase):
         self.assertLess(cd.sort_key(near, ref), cd.sort_key(past, ref))
 
 
+class PlanTest(unittest.TestCase):
+    """日程计划（时间管理页）的纯逻辑。"""
+
+    def test_plan_describe_states(self):
+        ref = dt.date(2026, 11, 4)
+        self.assertEqual(cd.plan_describe({"date": ""}, ref)["state"], "nodate")
+        self.assertEqual(cd.plan_describe({"date": "2026-11-09"}, ref)["text"],
+                         "还有 5 天")
+        self.assertEqual(cd.plan_describe({"date": "2026-11-04"}, ref)["text"],
+                         "今天要做")
+        self.assertEqual(cd.plan_describe({"date": "2026-11-01"}, ref)["text"],
+                         "已过 3 天")
+
+    def test_plan_sort_done_last(self):
+        ref = dt.date(2026, 11, 4)
+        overdue = {"title": "a", "date": "2026-11-01"}
+        today = {"title": "b", "date": "2026-11-04"}
+        future = {"title": "c", "date": "2026-11-09"}
+        nodate = {"title": "d", "date": ""}
+        done = {"title": "e", "date": "2026-11-01", "done": True,
+                "done_at": "2026-11-04"}
+        items = [done, future, nodate, today, overdue]
+        order = [i["title"] for i in sorted(
+            items, key=lambda i: cd.plan_sort_key(i, ref))]
+        # 未完成按日期临近（逾期最先），无日期排未完成末尾，已完成垫底
+        self.assertEqual(order, ["a", "b", "c", "d", "e"])
+
+
 class ConfigTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.mkdtemp()
@@ -230,6 +258,49 @@ class IconsCacheKeyTest(unittest.TestCase):
         from core.icons import cache_key
         self.assertEqual(cache_key(r"C:\A\b.txt", 48)[0],
                          item_key("c:/a/B.txt"))
+
+
+class PlanConfigTest(unittest.TestCase):
+    """config 层日程计划 CRUD。"""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.path = os.path.join(self.tmp, "config.json")
+        self.cm = ConfigManager(self.path)
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_add_and_get(self):
+        pid = self.cm.add_plan("写周报", "2026-11-07", "发给组长")
+        plan = self.cm.get_plan(pid)
+        self.assertEqual(plan["title"], "写周报")
+        self.assertEqual(plan["date"], "2026-11-07")
+        self.assertFalse(plan["done"])
+        self.assertEqual(plan["done_at"], "")
+        # date 可空 = 不限日期的待办
+        pid2 = self.cm.add_plan("随便想想")
+        self.assertEqual(self.cm.get_plan(pid2)["date"], "")
+
+    def test_update_done_records_done_at(self):
+        pid = self.cm.add_plan("一件事", "2026-11-07")
+        self.cm.update_plan(pid, done=True)
+        plan = self.cm.get_plan(pid)
+        self.assertTrue(plan["done"])
+        self.assertTrue(plan["done_at"])          # 记了完成日期
+        # 重做 → 清空
+        self.cm.update_plan(pid, done=False)
+        self.assertEqual(self.cm.get_plan(pid)["done_at"], "")
+
+    def test_update_text_fields_and_remove(self):
+        pid = self.cm.add_plan("原标题", "2026-11-07", "原备注")
+        self.assertTrue(self.cm.update_plan(pid, title="新标题", note="新备注"))
+        plan = self.cm.get_plan(pid)
+        self.assertEqual(plan["title"], "新标题")
+        self.assertEqual(plan["note"], "新备注")
+        self.assertTrue(self.cm.remove_plan(pid))
+        self.assertIsNone(self.cm.get_plan(pid))
+        self.assertFalse(self.cm.remove_plan(pid))
 
 
 if __name__ == "__main__":

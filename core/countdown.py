@@ -159,3 +159,50 @@ def quick_date(days: int, ref=None):
     """相对今天 N 天后的日期（快捷按钮用）。"""
     ref = ref or today()
     return ref + dt.timedelta(days=days)
+
+
+# ======================================================================
+# 日程计划（时间管理页）
+#
+# 一条计划的存储结构（config.json 的 plans 里）：
+#     {"id": "pl...", "title": "写周报", "date": "2026-11-07",
+#      "note": "", "done": false, "done_at": "", "created": "2026-11-04"}
+#
+# date  计划日期（YYYY-MM-DD），空串 = 不限日期的待办
+# done  是否已完成；done_at 记录勾选完成的日期（重做时清空）
+# ======================================================================
+
+def plan_describe(item, ref=None) -> dict:
+    """把一条计划算成页面直接可用的信息。
+
+    返回 dict：
+        state   'future' / 'today' / 'past' / 'nodate'
+        target  计划日期（nodate 时为 None）
+        text    主文案：「还有 N 天」「今天要做」「已过 N 天」「随时可做」
+    """
+    ref = ref or today()
+    base = parse_date(item.get("date"))
+    if base is None:
+        return {"state": "nodate", "target": None, "text": "随时可做"}
+    days = days_until(base, ref)
+    if days > 0:
+        state, text = "future", f"还有 {days} 天"
+    elif days == 0:
+        state, text = "today", "今天要做"
+    else:
+        state, text = "past", f"已过 {-days} 天"
+    return {"state": state, "target": base, "text": text}
+
+
+def plan_sort_key(item, ref=None):
+    """列表排序：未完成的在前（按日期临近，无日期排最后），完成的垫底。
+
+    返回的元组可直接传给 sorted 的 key。
+    """
+    ref = ref or today()
+    if item.get("done"):
+        return (1, item.get("done_at", ""), item.get("title", ""))
+    info = plan_describe(item, ref)
+    if info["state"] == "nodate":
+        return (0, "9999-12-31", item.get("title", ""))
+    return (0, fmt_date(info["target"]), item.get("title", ""))
