@@ -35,6 +35,8 @@ DEFAULT_CONFIG = {
     # 日程计划（时间管理页）：[{id, title, date, note, done, done_at, created}]
     # date 可为空 = 不限日期的待办；done_at 记录勾选完成的日期
     "plans": [],
+    # 日程计划是否按用户手动拖拽的顺序展示（拖过一次自动置 True）
+    "plans_manual_order": False,
     # 归类 key 方案版本（用于旧配置自动迁移）
     "assign_key_version": ASSIGN_KEY_VERSION,
 }
@@ -397,3 +399,24 @@ class ConfigManager:
             if item.get("id") == pid:
                 return item
         return None
+
+    def move_plan(self, pid: str, before_pid: str = None) -> bool:
+        """把一条计划挪到 before_pid 之前（None 表示挪到末尾）。
+
+        用户手动拖过一次排序后就开启 plans_manual_order：此后列表按
+        手动顺序展示，不再按「逾期 → 今天 → 未来」智能排序，直到配置
+        里的这个开关被清掉。
+        """
+        item = self.get_plan(pid)
+        if item is None:
+            return False
+        self.plans.remove(item)
+        for i, other in enumerate(self.plans):
+            if other.get("id") == before_pid:
+                self.plans.insert(i, item)
+                break
+        else:
+            self.plans.append(item)
+        self.data["plans_manual_order"] = True
+        self.save()
+        return True

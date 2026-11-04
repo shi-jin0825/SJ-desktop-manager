@@ -76,7 +76,7 @@ MAX_PREVIEW = PREVIEW_COLS ** 2
 
 UNDO_DEPTH = 10         # 「撤销上一步」最多记住几步整理操作
 
-APP_VERSION = "v1.12.1"      # 设置页「关于」显示；发版时跟着更新日志一起改
+APP_VERSION = "v1.12.2"      # 设置页「关于」显示；发版时跟着更新日志一起改
 KIND_LABEL = {"shortcut": "快捷方式", "dir": "文件夹", "file": "文件"}
 
 
@@ -1309,7 +1309,7 @@ class CountdownDialog(tk.Toplevel):
                  bg=c["dialog_bg"], fg=c["sidebar_muted"],
                  font=font(FS["sm"])).grid(row=row, column=0, pady=SP["sm"])
         tk.Entry(parent, textvariable=var, width=28,
-                 font=font(FS["sm"]), relief="flat",
+                 font=font(FS["md"]), relief="flat",
                  bg=c["panel_bg"], fg=c["text"],
                  insertbackground=c["text"],
                  highlightthickness=1,
@@ -1330,7 +1330,7 @@ class CountdownDialog(tk.Toplevel):
         cur = cd.parse_date(self.item.get("date")) or today
         lo_year = min(1970, cur.year)
 
-        kw = dict(font=font(FS["sm"]), width=5, justify="center",
+        kw = dict(font=font(FS["md"]), width=5, justify="center",
                   relief="flat", bd=0, bg=c["panel_bg"], fg=c["text"],
                   buttonbackground=c["panel_bg"],
                   insertbackground=c["text"],
@@ -1521,7 +1521,7 @@ class PlanDialog(tk.Toplevel):
                  bg=c["dialog_bg"], fg=c["sidebar_muted"],
                  font=font(FS["sm"])).grid(row=row, column=0, pady=SP["sm"])
         tk.Entry(parent, textvariable=var,
-                 font=font(FS["sm"]), relief="flat",
+                 font=font(FS["md"]), relief="flat",
                  bg=c["panel_bg"], fg=c["text"],
                  insertbackground=c["text"],
                  highlightthickness=1,
@@ -1543,7 +1543,7 @@ class PlanDialog(tk.Toplevel):
         today = cd.today()
         cur = cd.parse_date(self.item.get("date")) or today
 
-        kw = dict(font=font(FS["sm"]), width=5, justify="center",
+        kw = dict(font=font(FS["md"]), width=5, justify="center",
                   relief="flat", bd=0, bg=c["panel_bg"], fg=c["text"],
                   buttonbackground=c["panel_bg"],
                   insertbackground=c["text"],
@@ -1683,7 +1683,7 @@ class PomodoroDialog(tk.Toplevel):
         grid.pack(fill="x", padx=SP["xl"], pady=(SP["lg"], SP["sm"]))
         grid.grid_columnconfigure(1, weight=1)
 
-        kw = dict(font=font(FS["sm"]), width=5, justify="center",
+        kw = dict(font=font(FS["md"]), width=5, justify="center",
                   relief="flat", bd=0, bg=c["panel_bg"], fg=c["text"],
                   buttonbackground=c["panel_bg"],
                   insertbackground=c["text"],
@@ -1920,7 +1920,11 @@ class CountdownPage(BasePage):
         c = self.C
         for w in self.body.winfo_children():
             w.destroy()
-        plans = sorted(self.cfg.plans, key=cd.plan_sort_key)
+        # 用户拖过一次排序后按手动顺序展示；否则用「逾期 → 今天 → 未来」智能排序
+        if self.cfg.data.get("plans_manual_order"):
+            plans = list(self.cfg.plans)
+        else:
+            plans = sorted(self.cfg.plans, key=cd.plan_sort_key)
         items = sorted(self.cfg.countdowns, key=cd.sort_key)
 
         self._plan_section(plans)
@@ -1944,7 +1948,15 @@ class CountdownPage(BasePage):
 
     def _plan_section(self, plans):
         c = self.C
-        self._section_title("📋 日程计划")
+        head = tk.Frame(self.body, bg=c["app_bg"])
+        head.pack(fill="x", pady=(SP["sm"], SP["xs"]))
+        tk.Label(head, text="📋 日程计划", bg=c["app_bg"],
+                 fg=c["sidebar_muted"], font=font(FS["sm"], "bold"),
+                 anchor="w").pack(side="left")
+        if plans:
+            tk.Label(head, text="按住卡片可拖动排序", bg=c["app_bg"],
+                     fg=c["sidebar_muted"], font=font(FS["xs"])).pack(
+                side="right")
         if not plans:
             tk.Label(self.body, text="还没有计划 · 点上方「新建计划」排第一件事",
                      bg=c["app_bg"], fg=c["sidebar_muted"],
@@ -1984,7 +1996,14 @@ class CountdownPage(BasePage):
         title_lab.bind("<Configure>", lambda e, l=title_lab:
                        l.configure(wraplength=max(px(80), e.width - SP["sm"])))
 
+        # 拖拽排序：按住卡片空白处（不是勾选框 / 按钮）上下拖动换位
         pid = item.get("id")
+        card._plan_id = pid
+        for w in (card, mid) + tuple(mid.winfo_children()):
+            w.bind("<Button-1>", lambda e, p=pid: self._drag_start(e, p))
+            w.bind("<B1-Motion>", lambda e, p=pid: self._drag_move(e, p))
+            w.bind("<ButtonRelease-1>", lambda e, p=pid: self._drag_drop(e, p))
+
         acts = (("编辑", lambda pid=pid: self._edit_plan(pid)),
                 ("删除", lambda pid=pid: self._delete_plan(pid), True))
         self._card_buttons(card, acts)
@@ -2017,6 +2036,64 @@ class CountdownPage(BasePage):
         draw()
         cv.bind("<Button-1>", toggle)
         return cv
+
+    # ---- 拖拽排序 ----
+    def _drag_start(self, event, pid):
+        card = self._find_plan_card(pid)
+        if card is None:
+            return
+        self._drag = {"id": pid, "card": card,
+                      "y0": event.y_root, "start_y": card.winfo_y(),
+                      "h": card.winfo_height(), "active": False}
+
+    def _drag_move(self, event, pid):
+        drag = getattr(self, "_drag", None)
+        if not drag or drag["id"] != pid:
+            return
+        if not drag["active"]:
+            # 超过阈值才算开始拖，避免和「点按选中」打架
+            if abs(event.y_root - drag["y0"]) <= px(6):
+                return
+            drag["active"] = True
+            drag["card"].place(relwidth=1, y=drag["start_y"])
+            drag["card"].lift()
+            drag["card"].configure(cursor="fleur",
+                                   highlightbackground=self.C["accent"])
+        cards = self._plan_card_widgets()
+        if not cards:
+            return
+        top = cards[0].winfo_y()
+        bottom = cards[-1].winfo_y() + cards[-1].winfo_height()
+        new_y = drag["start_y"] + (event.y_root - drag["y0"])
+        new_y = max(top, min(new_y, bottom - drag["h"]))
+        drag["card"].place(y=new_y)
+
+    def _drag_drop(self, event, pid):
+        drag = getattr(self, "_drag", None)
+        self._drag = None
+        if not drag or drag["id"] != pid or not drag.get("active"):
+            return
+        # 松手位置插到哪张卡片前面（按各卡片纵向中心比较）
+        before_id = None
+        for w in self._plan_card_widgets():
+            if w is drag["card"]:
+                continue
+            if event.y_root < w.winfo_rooty() + w.winfo_height() / 2:
+                before_id = w._plan_id
+                break
+        self.cfg.move_plan(pid, before_id)
+        self.refresh()
+
+    def _find_plan_card(self, pid):
+        for w in self._plan_card_widgets():
+            if getattr(w, "_plan_id", None) == pid:
+                return w
+        return None
+
+    def _plan_card_widgets(self):
+        """body 里所有计划卡片（按 pack 顺序），区块标题 / 分隔线不算。"""
+        return [w for w in self.body.winfo_children()
+                if getattr(w, "_plan_id", None) is not None]
 
     @staticmethod
     def _plan_date_text(item) -> str:

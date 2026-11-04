@@ -424,7 +424,7 @@ class RoundedEntry(tk.Canvas):
                               bg=bg, fg=c.get("text", "#333333"),
                               insertbackground=c.get("text", "#333333"),
                               highlightthickness=0,
-                              font=fonts.font(FS["xs"]),
+                              font=fonts.font(FS["sm"]),
                               selectbackground=c.get("accent", "#4b6bfb"),
                               selectforeground=c.get("accent_fg", "#ffffff"))
         self.ic = IconLabel(self, icon, px(16), c.get("nav_icon", "#5a6478"), bg=bg)
