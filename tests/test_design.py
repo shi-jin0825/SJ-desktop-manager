@@ -13,7 +13,18 @@ import unittest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from gui.tokens import BAR_H, FS, SP, UI_SCALE, px   # noqa: E402
-from gui.pages import TILE_SIZE, TILE_PRESETS, tile_scale  # noqa: E402
+
+try:
+    # gui.pages 顶层 import tkinter：无 tk 的环境（CI Linux / 精简 Python）
+    # 导入即崩，连不依赖 GUI 的文本扫描用例也一起被拖下水，所以包一层
+    from gui.pages import TILE_SIZE, TILE_PRESETS, tile_scale  # noqa: E402
+    _HAS_PAGES = True
+except ImportError:
+    _HAS_PAGES = False
+    TILE_SIZE = TILE_PRESETS = tile_scale = None
+
+require_pages = unittest.skipUnless(
+    _HAS_PAGES, "当前 Python 没有 tkinter，跳过 gui.pages 相关用例")
 
 GUI_FILES = ["gui/pages.py", "gui/app.py", "gui/widgets.py", "gui/pet.py"]
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -48,6 +59,7 @@ class TokenTest(unittest.TestCase):
         self.assertGreaterEqual(min(FS.values()), 10)   # 可读下限
 
 
+@require_pages
 class TileScaleTest(unittest.TestCase):
     def test_monotonic_and_bounded(self):
         prev = 0.0

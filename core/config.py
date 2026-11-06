@@ -10,9 +10,23 @@
 """
 import json
 import os
+import sys
 import time
 
-CONFIG_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "config.json")
+
+def _config_dir() -> str:
+    """config.json 所在目录。
+
+    PyInstaller --onefile 会把代码解到 %TEMP%\\_MEIxxxx，__file__ 落在
+    那里，退出即被删——打包版必须用 sys.executable 所在目录，否则用户
+    每次启动都是全新配置（分类 / 倒计时全丢）。
+    """
+    if getattr(sys, "frozen", False):
+        return os.path.dirname(sys.executable)
+    return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+CONFIG_FILE = os.path.join(_config_dir(), "config.json")
 
 # 备份 / 临时文件后缀
 BAK_SUFFIX = ".bak"
@@ -20,6 +34,8 @@ TMP_SUFFIX = ".tmp"
 
 # 归类 key 的版本：1 = 老版按文件名，2 = 按规范化路径
 ASSIGN_KEY_VERSION = 2
+
+_MISSING = object()      # _fill 区分「字段缺失」和「字段为 None」的哨兵
 
 DEFAULT_CONFIG = {
     "categories": ["工具", "办公", "娱乐"],
@@ -111,9 +127,24 @@ class ConfigManager:
         return self._fill({})
 
     def _fill(self, data: dict) -> dict:
-        """补全缺失字段，避免旧配置升级后 KeyError。"""
+        """补全缺失字段 + 校验类型，避免旧配置升级后 KeyError / AttributeError。
+
+        「合法 JSON、错误结构」的配置（比如 settings 被写成 null、
+        categories 写成字符串）以前会穿透到 get_setting() 抛
+        AttributeError，App.__init__ 直接死，pythonw 下表现为双击没反应。
+        类型不匹配的字段直接回退默认值——损失个别设置，好过打不开软件。
+        """
+        if not isinstance(data, dict):
+            data = {}
         for key, val in DEFAULT_CONFIG.items():
-            data.setdefault(key, json.loads(json.dumps(val)))
+            default = json.loads(json.dumps(val))
+            cur = data.get(key, _MISSING)
+            if cur is _MISSING or not isinstance(cur, type(val)):
+                data[key] = default
+            elif isinstance(val, dict):
+                # dict 字段逐键兜底：settings 缺 theme 之类时不至于 KeyError
+                for sub_key, sub_val in val.items():
+                    cur.setdefault(sub_key, json.loads(json.dumps(sub_val)))
         return data
 
     def _corrupt_name(self) -> str:
@@ -280,7 +311,13 @@ class ConfigManager:
 
         只清理「看起来像路径」的 key，旧版文件名 key 不动（等迁移处理）。
         返回清理条数。
+
+        护栏：alive 为空时直接跳过——扫描失败（桌面被 OneDrive 接管 /
+        暂时不可读）和「桌面真的空了」无法区分，宁可留着死条目，也不能
+        把用户多年积累的归类一锅端（误删立即落盘，只能靠 .bak 救）。
         """
+        if not alive_paths and self.data["assignments"]:
+            return 0
         alive = set(item_key(p) for p in alive_paths)
         dead = [k for k in self.data["assignments"]
                 if os.path.isabs(k) and k not in alive]

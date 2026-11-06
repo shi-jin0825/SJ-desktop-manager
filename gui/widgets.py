@@ -354,7 +354,10 @@ class ModernButton(tk.Canvas):
         total = ss * ss
         half = 0.5 * math.sqrt(2.0)      # 像素中心到角点的距离，用于快速判定
         if img is None or img.width() != w or img.height() != h:
-            img = tk.PhotoImage(width=w, height=h)
+            # master 显式给 self：不带 master 时挂默认根，多 Tk 实例
+            # （单测/子窗口）下默认根可能不是本控件所在解释器，
+            # create_image 时报 TclError: image "pyimageN" doesn't exist
+            img = tk.PhotoImage(master=self, width=w, height=h)
 
         bg_hex = "#%02x%02x%02x" % bg
         rows = []

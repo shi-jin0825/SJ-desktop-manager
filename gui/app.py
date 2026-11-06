@@ -576,6 +576,36 @@ class App(tk.Tk):
             ic.bind("<Leave>", lambda e, i=ic: i.set_color(normal_fg))
 
     # ---------------- 页面路由 ----------------
+    def _error_page(self, key, page_cls, exc):
+        """页面构造失败时的兜底：错误信息 + 重试按钮，导航保持可用。
+
+        没有这个兜底时，任一页构造抛异常会被 Tk 回调吞掉——表现为
+        「点导航什么都没发生」，用户连原因都看不到（v1.12 倒数日
+        解包 bug 就是这么拖垮整个页面的）。
+        """
+        import traceback
+        traceback.print_exc()          # 细节进控制台 / 日志，界面只给结论
+        c = self.C
+        frame = tk.Frame(self.content, bg=c["app_bg"])
+        box = tk.Frame(frame, bg=c["app_bg"])
+        box.pack(expand=True)
+        tk.Label(box, text="⚠️", bg=c["app_bg"], fg=c["text"],
+                 font=font(FS["hero"])).pack()
+        tk.Label(box, text="「%s」页面加载失败" % page_cls.title,
+                 bg=c["app_bg"], fg=c["text"],
+                 font=font(FS["md"], "bold")).pack(pady=(SP["sm"], SP["xs"]))
+        tk.Label(box, text=str(exc) or exc.__class__.__name__, bg=c["app_bg"],
+                 fg=c["sidebar_muted"], font=font(FS["xs"]),
+                 wraplength=px(360), justify="center").pack()
+
+        def retry():
+            self._pages.pop(key, None)
+            self._show_page(key)
+
+        ModernButton(box, text="重试", command=retry, c=c, primary=True,
+                     bg=c["app_bg"]).pack(pady=SP["md"])
+        return frame
+
     def _show_page(self, key: str, force: bool = False):
         """切换右侧主内容区显示的页面。
 
@@ -608,7 +638,10 @@ class App(tk.Tk):
             pages.pop(key, None)
             page = None
         if page is None:
-            page = page_cls(self.content, self)
+            try:
+                page = page_cls(self.content, self)
+            except Exception as exc:                    # 页面构造崩了不能拖垮导航
+                page = self._error_page(key, page_cls, exc)
             pages[key] = page
 
         for k, p in pages.items():

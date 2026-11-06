@@ -76,7 +76,7 @@ MAX_PREVIEW = PREVIEW_COLS ** 2
 
 UNDO_DEPTH = 10         # 「撤销上一步」最多记住几步整理操作
 
-APP_VERSION = "v1.12.2"      # 设置页「关于」显示；发版时跟着更新日志一起改
+APP_VERSION = "v1.12.3"      # 设置页「关于」显示；发版时跟着更新日志一起改
 KIND_LABEL = {"shortcut": "快捷方式", "dir": "文件夹", "file": "文件"}
 
 
@@ -865,8 +865,11 @@ class DesktopPage(BasePage):
         shadow = self._shadow(slot)
         name = self._fit_tile_name(item.display_name)
         emoji = {"dir": "🗂", "shortcut": "🧩", "file": "📄"}.get(item.kind, "📄")
-        # 先占位（emoji + 透明图保证尺寸稳定），真实图标由 _pump_icons 异步补上
-        blank = tk.PhotoImage(width=self.icon_size, height=self.icon_size)
+        # 先占位（emoji + 透明图保证尺寸稳定），真实图标由 _pump_icons 异步补上。
+        # master 必须显式给 slot：PhotoImage 不带 master 时挂默认根，
+        # 单测/多窗口场景默认根可能不是本页所在的解释器，报
+        # TclError: image "pyimageN" doesn't exist
+        blank = tk.PhotoImage(master=slot, width=self.icon_size, height=self.icon_size)
         self._photos.append(blank)
         # 注意不要给 tk.Button 传 width/height：那两个参数的单位是「字符」，
         # 塞像素值进去会把按钮的内容画布撑到巨大，place 只露出中间一条，
@@ -2235,7 +2238,8 @@ class CountdownPage(BasePage):
             return
         menu = tk.Menu(card, tearoff=0)
         style_menu(menu, c)
-        for text, cmd in acts:
+        # acts 里可能有第三元素（是否主操作，_card_buttons 用），这里只取前两个
+        for text, cmd, *_ in acts:
             menu.add_command(label=text, command=cmd)
         self._bind_menu(card, menu)
 

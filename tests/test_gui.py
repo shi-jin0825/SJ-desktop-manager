@@ -73,6 +73,7 @@ class CapsuleButtonTest(unittest.TestCase):
         btn.destroy()
 
 
+@require_tk
 class TileScaleTest(unittest.TestCase):
     """首页磁贴随窗口放大：尺寸单调变大、列数合理、不超出网格宽度。
 

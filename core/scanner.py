@@ -41,14 +41,37 @@ class DesktopItem:
         return name
 
 
+def _shell_folder(csidl: int) -> str:
+    """SHGetFolderPathW 取系统已知目录（桌面被重定向到 D 盘 / OneDrive
+    接管时也能拿到真实路径）；失败返回空串，走调用方的兜底。"""
+    import ctypes
+    try:
+        buf = ctypes.create_unicode_buffer(260)
+        hr = ctypes.windll.shell32.SHGetFolderPathW(None, csidl, None, 0, buf)
+        if hr == 0:
+            return buf.value
+    except Exception:
+        pass
+    return ""
+
+
 def get_desktop_paths() -> list:
-    """获取当前用户的桌面路径（含公共桌面）。"""
-    home = os.path.expanduser("~")
-    paths = [os.path.join(home, "Desktop")]
-    public = os.path.join(os.environ.get("PUBLIC", os.path.join(home, "..", "Public")), "Desktop")
-    if os.path.isdir(public):
+    """获取当前用户的桌面路径（含公共桌面）。
+
+    优先 SHGetFolderPathW（CSIDL）：桌面被重定向（D 盘 / OneDrive）时
+    ~\\Desktop 不存在，硬拼路径会拿到空列表，进而触发清空归类的连锁问题。
+    """
+    paths = []
+    user = _shell_folder(0x0010)   # CSIDL_DESKTOPDIRECTORY
+    if not user:
+        user = os.path.join(os.path.expanduser("~"), "Desktop")
+    paths.append(user)
+    public = _shell_folder(0x0019)  # CSIDL_COMMON_DESKTOPDIRECTORY
+    if not public:
+        public = os.path.join(os.environ.get("PUBLIC", ""), "Desktop")
+    if public and os.path.isdir(public):
         paths.append(public)
-    return [p for p in paths if os.path.isdir(p)]
+    return [p for p in paths if p and os.path.isdir(p)]
 
 
 def scan_desktop() -> list:
