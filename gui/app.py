@@ -61,6 +61,7 @@ class App(tk.Tk):
         super().__init__()
         self.title(APP_TITLE)
         self.config_mgr = ConfigManager()
+        self.config_mgr.error_reporter = self._on_save_error
         self.cfg = self.config_mgr      # 简写别名（桌宠等模块用）
         self.theme_name = self.config_mgr.get_setting("theme", DEFAULT_THEME)
         self.C = get_theme(self.theme_name)
@@ -199,6 +200,11 @@ class App(tk.Tk):
                                     % (hotkey.combo_text(mod, vk),
                                        hotkey.combo_text(m, v)))
                     break
+            else:
+                # 候选组合全部注册失败：不能静默——用户会以为热键没生效是
+                # 自己的操作问题。设置页会显示这条提示，引导手动改组合。
+                self.hk_auto = ("全局热键注册失败（候选组合可能都被占用），"
+                                "请在下方手动更换组合")
         if not getattr(self, "_hotkey_polling", False):
             self._hotkey_polling = True     # 轮询链只启动一次
             self.after(200, self._hotkey_poll)
@@ -245,6 +251,17 @@ class App(tk.Tk):
                     pet._bubble.say(f"按 {self.hotkey_text()} 可以随时叫我回来～", 4000)
                 except Exception:
                     pass
+
+    def _on_save_error(self, err: str):
+        """config.json 写盘失败的提示（exe 装进只读目录 / 盘满时会走到）。"""
+        try:
+            messagebox.showwarning(
+                "⚠ 配置保存失败",
+                "config.json 写入失败：%s\n\n本次修改只保留在内存中，重启后会"
+                "丢失。建议把程序放到有写入权限的目录。" % err,
+                parent=self)
+        except Exception:
+            pass
 
     def _notify_load_status(self):
         """配置层记录了"这次读取不顺利"时，明确告诉用户一次。
@@ -843,9 +860,19 @@ class App(tk.Tk):
         self.refresh_current_page()
 
     def _on_wheel(self, event):
-        """鼠标滚轮转发给当前页面的画布（首页网格）。"""
+        """鼠标滚轮转发给当前页面的画布（首页网格）。
+
+        bind_all 会收到应用内「所有」控件的滚轮事件——设置页、弹窗、
+        对话框里滚动鼠标时不许连带滚动背后的首页网格，所以先确认事件
+        确实发生在 canvas 自己（或它的后代）上。
+        """
         canvas = getattr(getattr(self, "current_page", None), "canvas", None)
         if canvas is None:
+            return
+        w = event.widget
+        while w is not None and w is not canvas:
+            w = getattr(w, "master", None)
+        if w is not canvas:
             return
         try:
             canvas.yview_scroll(-1 * (event.delta // 120), "units")

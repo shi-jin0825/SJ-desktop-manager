@@ -82,7 +82,15 @@ def scan_desktop() -> list:
     """
     items = []
     for desktop in get_desktop_paths():
-        for entry in os.scandir(desktop):
+        try:
+            # 桌面被 OneDrive 接管 / 目录暂时不可读时，跳过这一个目录，
+            # 不能让整个扫描崩溃——调用方没兜这层，回调异常会被 Tk 吞掉，
+            # 用户看到的就是一个没有任何提示的空白首页。
+            with os.scandir(desktop) as it:
+                entries = list(it)
+        except OSError:
+            continue
+        for entry in entries:
             if _is_hidden(entry.path):
                 continue
             if entry.name.lower().endswith((".lnk", ".url")):

@@ -86,6 +86,8 @@ class ConfigManager:
         # 加载结果说明："" 正常 / "recovered" 从备份恢复 / "reset" 已重置为默认
         self.load_status = ""
         self.status_note = ""
+        self.save_error = ""            # 最近一次写盘失败的错误文本（"" = 正常）
+        self.error_reporter = None      # App 挂的「写盘失败」通知回调
         self.data = self._load()
         self._migrate()
 
@@ -162,8 +164,26 @@ class ConfigManager:
                 pass
 
     # ---------------- 写入 ----------------
+    # 写盘彻底失败（盘满 / 目录只读，比如 exe 被装进 Program Files）时不向上
+    # 抛 OSError——所有 set_setting / 归类操作都在 Tk 回调里，抛出去只会被
+    # Tk 吞掉、操作看着成功了其实没落盘。改为记录 save_error 并通知
+    # error_reporter（App 挂一个弹窗上来），本次修改留在内存里、下次启动
+    # 回退到磁盘上的旧值，用户至少知道发生了什么。
     def save(self):
         """原子写入：临时文件 → fsync → os.replace，并保留上一份为 .bak。"""
+        try:
+            self._save_atomic()
+            self.save_error = ""
+        except OSError as e:
+            self.save_error = str(e)
+            reporter = getattr(self, "error_reporter", None)
+            if reporter is not None:
+                try:
+                    reporter(str(e))
+                except Exception:
+                    pass
+
+    def _save_atomic(self):
         text = json.dumps(self.data, ensure_ascii=False, indent=2)
         tmp = self.path + TMP_SUFFIX
         try:

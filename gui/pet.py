@@ -555,18 +555,6 @@ class DesktopPet(tk.Toplevel):
             traceback.print_exc()        # 其它异常：打出来，动画继续跑
         self.after(max(8, int(1000 / FPS)), self._tick)
 
-    def _monitor_tick(self):
-        if not self._alive:
-            return
-        try:
-            self._sample()
-        except tk.TclError:
-            self._alive = False
-            return
-        except Exception:
-            traceback.print_exc()
-        self.after(int(MONITOR_PERIOD_S * 1000), self._monitor_tick)
-
     def _step(self):
         """一帧物理。
 
@@ -656,8 +644,12 @@ class DesktopPet(tk.Toplevel):
 
     # ============================ Q 弹压缩 ============================
     def _play_squash(self, impact=0.0):
-        """落地压缩动画：冲得越狠压得越扁、弹得越久。"""
-        base = self._faces.get("idle") or self._faces.get(self._face)
+        """落地压缩动画：冲得越狠压得越扁、弹得越久。
+
+        基底用「当前脸」而不是永远 idle：番茄钟伴学时落地，压缩帧
+        不会把捧书脸切回默认笑脸闪一下。
+        """
+        base = self._faces.get(self._face) or self._faces["idle"]
         frames = []
         seq = ((2, 3, 6, 5), (4, 5, 5, 4), (5, 4, 4, 5), (9, 8, 8, 9))
         if impact <= 900:

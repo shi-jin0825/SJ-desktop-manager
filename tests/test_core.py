@@ -303,5 +303,73 @@ class PlanConfigTest(unittest.TestCase):
         self.assertFalse(self.cm.remove_plan(pid))
 
 
+class ScannerResilienceTest(unittest.TestCase):
+    """扫描的健壮性：单个桌面目录不可读不能拖垮整个扫描。"""
+
+    def test_unreadable_desktop_dir_skipped(self):
+        from core import scanner
+        real = scanner.get_desktop_paths
+        tmp = tempfile.mkdtemp()
+        try:
+            ok_dir = os.path.join(tmp, "ok")
+            os.mkdir(ok_dir)
+            open(os.path.join(ok_dir, "a.txt"), "w").close()
+            # 不存在的目录（权限错误 / OneDrive 临时不可读的替身）
+            bad_dir = os.path.join(tmp, "gone")
+            scanner.get_desktop_paths = lambda: [ok_dir, bad_dir]
+            items = scanner.scan_desktop()
+            self.assertEqual([i.name for i in items], ["a.txt"])
+        finally:
+            scanner.get_desktop_paths = real
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_all_dirs_gone_returns_empty_not_raise(self):
+        from core import scanner
+        real = scanner.get_desktop_paths
+        scanner.get_desktop_paths = lambda: [
+            os.path.join(tempfile.gettempdir(), "definitely-not-exists-xyz")]
+        try:
+            self.assertEqual(scanner.scan_desktop(), [])
+        finally:
+            scanner.get_desktop_paths = real
+
+
+class SaveErrorTest(unittest.TestCase):
+    """写盘失败（盘满 / 只读目录）不抛异常，而是记录并通知 error_reporter。"""
+
+    def setUp(self):
+        self.dir = tempfile.mkdtemp()
+        self.path = os.path.join(self.dir, "config.json")
+
+    def tearDown(self):
+        shutil.rmtree(self.dir, ignore_errors=True)
+
+    def _readonly_cm(self):
+        cm = ConfigManager(self.path)
+        # 把目录改成只读，让任何写入都失败（Windows 下对已有文件仍可能可写，
+        # 所以直接把 open 打成抛错，跨平台稳定）
+        cm._save_atomic = lambda: (_ for _ in ()).throw(
+            OSError(28, "No space left on device"))
+        return cm
+
+    def test_save_failure_recorded_not_raised(self):
+        cm = self._readonly_cm()
+        reported = []
+        cm.error_reporter = reported.append
+        cm.set_setting("theme", "dark")     # 不应当抛
+        self.assertTrue(cm.save_error)
+        self.assertEqual(len(reported), 1)  # reporter 被调到了
+        # 失败不影响内存里的数据
+        self.assertEqual(cm.get_setting("theme"), "dark")
+
+    def test_save_success_clears_error(self):
+        cm = ConfigManager(self.path)
+        cm.save_error = "旧错误"
+        cm.set_setting("theme", "dark")
+        self.assertEqual(cm.save_error, "")
+        with open(self.path, encoding="utf-8") as f:
+            self.assertEqual(json.load(f)["settings"]["theme"], "dark")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
