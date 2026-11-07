@@ -151,6 +151,17 @@ def _calendar(cv, s, color, w):
     _line(cv, [(3, 9.4), (21, 9.4)], s, color, w)
 
 
+def _pause(cv, s, color, w):
+    """暂停：两条竖线。"""
+    _line(cv, [(9, 5.5), (9, 18.5)], s, color, w)
+    _line(cv, [(15, 5.5), (15, 18.5)], s, color, w)
+
+
+def _play(cv, s, color, w):
+    """继续 / 播放：实心三角（线性风格里用折线闭合，右侧尖角）。"""
+    _line(cv, [(8, 5.5), (18, 12), (8, 18.5), (8, 5.5)], s, color, w)
+
+
 ICONS = {
     "home": _home,
     "grid": _grid,
@@ -166,6 +177,8 @@ ICONS = {
     "folder": _folder,
     "close": _close,
     "calendar": _calendar,
+    "pause": _pause,
+    "play": _play,
 }
 
 

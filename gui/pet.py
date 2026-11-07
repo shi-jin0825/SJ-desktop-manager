@@ -376,9 +376,20 @@ class Bubble(tk.Toplevel):
         self.withdraw()
         self._auto = None
         self.bw = self.bh = 0
+        # 优先级仲裁：番茄钟倒计时 > 庆祝 > 状态提示/互动，低优先级不许
+        # 抢占高优先级的显示位（以前 8 处写入互相覆盖，倒计时一闪一闪）
+        self._priority = 0
+        self._hold_until = 0.0
 
-    def say(self, text: str, ms=3000):
-        """显示气泡；ms 毫秒后自动消失（0 = 一直显示直到 hide）。"""
+    def say(self, text: str, ms=3000, priority: int = 1) -> bool:
+        """显示气泡；ms 毫秒后自动消失（0 = 一直显示直到 hide）。
+
+        有更高优先级的信息在显示时拒绝写入（返回 False），同优先级
+        （如每秒刷新的倒计时）允许覆盖更新。
+        """
+        now = time.monotonic()
+        if now < self._hold_until and priority < self._priority:
+            return False
         c = self._c
         self._cv.delete("all")
         probe = self._cv.create_text(0, 0, text=text, anchor="nw",
@@ -409,11 +420,17 @@ class Bubble(tk.Toplevel):
             except Exception:
                 pass
             self._auto = None
+        self._priority = priority
+        # ms=0 = 长期占位（如倒计时），靠同/更高优先级覆盖或 hide() 释放
+        self._hold_until = now + (ms / 1000.0 if ms else 86400.0)
         if ms:
             self._auto = self.after(ms, self.hide)
+        return True
 
     def hide(self):
         self._auto = None
+        self._priority = 0
+        self._hold_until = 0.0
         try:
             self.withdraw()
         except tk.TclError:
@@ -713,8 +730,11 @@ class DesktopPet(tk.Toplevel):
             return
 
         pomo = self._pomodoro()
-        # 番茄钟结束或被手动取消：收起倒计时气泡，不再显示剩余时间
-        if not pomo and self._pomo_showing:
+        # 番茄钟结束或被手动取消：收起倒计时气泡，不再显示剩余时间。
+        # 暂停中不收回——下面会把气泡换成「已暂停」提示
+        if (not pomo and self._pomo_showing
+                and not (getattr(self._master, "pomodoro", None) or {})
+                        .get("paused")):
             self._pomo_showing = False
             if not self._celebrating:
                 self._bubble.hide()
@@ -736,9 +756,25 @@ class DesktopPet(tk.Toplevel):
             # 是裸索引 pomo["minutes"]，缺键就抛 KeyError，采样链当场断掉。
             left = max(0, int(pomo.get("end", 0) - time.time()))
             m, s = divmod(left, 60)
-            mins = pomo.get("minutes") or self._pomo_minutes()
-            self._bubble.say(f"📚 番茄钟 {mins} 分钟\n"
-                             f"还剩 {m:02d}:{s:02d}，我陪你学习", 0)
+            if pomo.get("phase") == "rest":
+                # 休息阶段：倒计时 + 换开心脸，和专注阶段区分开
+                self._bubble.say(f"☕ 休息 {m:02d}:{s:02d}\n"
+                                 "喝口水，眺望一下远方～", 0, priority=3)
+                self._set_face("happy")
+            else:
+                mins = pomo.get("minutes") or self._pomo_minutes()
+                self._bubble.say(f"📚 番茄钟 {mins} 分钟\n"
+                                 f"还剩 {m:02d}:{s:02d}，我陪你学习", 0,
+                                 priority=3)
+                self._set_face("study")
+            self._pomo_showing = True
+            return
+
+        # 暂停中的番茄钟：气泡换成暂停提示，恢复或结束后由上面的分支接管
+        raw = getattr(self._master, "pomodoro", None)
+        if raw and raw.get("paused"):
+            self._bubble.say("⏸ 番茄钟已暂停\n休息好了点「继续」吧～", 0,
+                             priority=3)
             self._set_face("study")
             self._pomo_showing = True
             return
@@ -759,21 +795,35 @@ class DesktopPet(tk.Toplevel):
         self._set_face(state)
 
     def _measure(self):
-        """读系统指标 → (状态名, 气泡文案)。"""
+        """读系统指标 → (状态名, 气泡文案)。
+
+        三个指标各自独立容错：CPU 采不到（首次调用只建基准，返回 None）
+        不影响内存 / 网速的判断。以前 cpu=None 会在 >= 比较处抛 TypeError，
+        被外层一并吞掉——三个联动一起静默失效，且没有任何提示。
+        """
+        from core import sysinfo
+        cpu, mem, down, net_ok = None, None, 0.0, False
         try:
-            from core import sysinfo
             cpu = sysinfo.cpu_percent()
+        except Exception:
+            cpu = None
+        try:
             mem = sysinfo.mem_info() or {}
-            load = mem.get("load", 0.0)
+        except Exception:
+            mem = None
+        try:
             sp = sysinfo.net_speed()
             down = sp[0] if sp else 0.0
+            net_ok = True
         except Exception:
-            down = 0.0
-            self._net_down = down
-            return "idle", None
+            down, net_ok = 0.0, False
         self._net_down = down
-        if cpu >= CPU_HOT:
+        if cpu is None and mem is None and not net_ok:
+            # 全部采不到：至少让用户知道联动为什么不动了
+            return "idle", "😵 系统状态采不到了…\n联动先休息，我乖乖待着"
+        if cpu is not None and cpu >= CPU_HOT:
             return "hot", (f"🥵 CPU {cpu:.0f}%，好热呀…\n（吐舌头散热中）")
+        load = (mem or {}).get("load", 0.0)
         if load >= MEM_TIRED:
             return "tired", (f"😵 内存负载 {load:.0f}%…\n走不动了，让电脑歇歇吧")
         if down >= NET_FAST:
@@ -782,8 +832,9 @@ class DesktopPet(tk.Toplevel):
 
     # ============================ 番茄钟 ============================
     def _pomodoro(self):
+        """正在走表的番茄钟；暂停中或已到点的都不算。"""
         p = getattr(self._master, "pomodoro", None)
-        if p and time.time() < p.get("end", 0):
+        if p and not p.get("paused") and time.time() < p.get("end", 0):
             return p
         return None
 
@@ -821,6 +872,11 @@ class DesktopPet(tk.Toplevel):
         if stop:
             stop()
 
+    def _pause_pomodoro(self):
+        fn = getattr(self._master, "pause_or_resume_pomodoro", None)
+        if fn:
+            fn()
+
     def on_pomodoro_end(self, kind="stop", minutes=0, break_minutes=0):
         """番茄钟结束 / 被取消：立刻收起头顶的倒计时。
 
@@ -830,8 +886,10 @@ class DesktopPet(tk.Toplevel):
         if kind == "done":
             rest = break_minutes or getattr(self._master, "pomo_break", 5)
             try:
+                # priority=2：庆祝期间不被状态提示（priority=1）抢位，
+                # 但下一秒的同优先级刷新仍会正常更新
                 self._bubble.say(f"🍅 {minutes} 分钟专注完成！\n"
-                                 f"休息 {rest} 分钟吧～", 8000)
+                                 f"休息 {rest} 分钟吧～", 8000, priority=2)
             except Exception:
                 pass
             self._celebrating = True
@@ -913,6 +971,8 @@ class DesktopPet(tk.Toplevel):
         self._pomo_item = self._menu.index("end")
         self._menu.add_command(label="⏱ 自定义番茄钟时长…",
                                command=self._custom_pomodoro)
+        self._menu.add_command(label="⏸ 暂停 / 继续番茄钟",
+                               command=self._pause_pomodoro)
         self._menu.add_command(label="⏹ 结束番茄钟",
                                command=self._stop_pomodoro)
         self._menu.add_separator()

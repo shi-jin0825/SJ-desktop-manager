@@ -6,6 +6,7 @@
 """
 import calendar
 import datetime as dt
+import json
 import os
 import tkinter as tk
 from tkinter import font as tkfont
@@ -76,7 +77,7 @@ MAX_PREVIEW = PREVIEW_COLS ** 2
 
 UNDO_DEPTH = 10         # 「撤销上一步」最多记住几步整理操作
 
-APP_VERSION = "v1.12.5"      # 设置页「关于」显示；发版时跟着更新日志一起改
+APP_VERSION = "v1.13.0"      # 设置页「关于」显示；发版时跟着更新日志一起改
 KIND_LABEL = {"shortcut": "快捷方式", "dir": "文件夹", "file": "文件"}
 
 
@@ -1230,6 +1231,31 @@ class StatsPage(BasePage):
             n = sum(1 for i in items if i.kind == kind)
             self._row(KIND_LABEL.get(kind, kind), n, total)
 
+        # 专注与计划：番茄轮数 / 累计专注 / 计划完成率
+        self._section("专注与计划")
+        st = self.cfg.get_setting("pomo_stats") or {}
+        if not isinstance(st, dict):
+            st = {}
+        try:
+            sessions = int(st.get("sessions") or 0)
+            focus_min = int(st.get("focus_minutes") or 0)
+        except (TypeError, ValueError):
+            sessions, focus_min = 0, 0
+        if sessions:
+            tk.Label(self.body,
+                     text=(f"🍅 完成 {sessions} 轮番茄钟 · 累计专注 "
+                           f"{focus_min // 60} 小时 {focus_min % 60} 分钟"),
+                     bg=c["app_bg"], fg=c["text"],
+                     font=font(FS["sm"])).pack(anchor="w", pady=SP["xs"])
+        else:
+            tk.Label(self.body, text="🍅 还没有完成过番茄钟 · 时间管理页开始第一轮",
+                     bg=c["app_bg"], fg=c["text_muted"],
+                     font=font(FS["sm"])).pack(anchor="w", pady=SP["xs"])
+        plans = self.cfg.plans
+        if plans:
+            done_plans = sum(1 for p in plans if p.get("done"))
+            self._row("计划完成", done_plans, len(plans))
+
         self.app.update_topbar(f"已归类 {done}/{total} 项")
 
     def _section(self, text):
@@ -1834,9 +1860,13 @@ class CountdownPage(BasePage):
         super().__init__(master, app)
 
     def _build(self):
+        paused = bool(self.app.pomodoro and self.app.pomodoro.get("paused"))
+        pause_text = "继续番茄钟" if paused else "暂停番茄钟"
         self._toolbar([("calendar", "新建计划", self._add_plan),
                        ("clock", "新建倒计时", self._add),
                        ("grid", "开始番茄钟", self._start_pomo),
+                       ("pause" if not paused else "play", pause_text,
+                        self._pause_pomo),
                        ("close", "结束番茄钟", self._stop_pomo),
                        ("refresh", "刷新", self.refresh)])
         self.body = self._scroll_body().body
@@ -1855,6 +1885,15 @@ class CountdownPage(BasePage):
             "召唤桌宠（⚙ 设置 → 桌面宠物）\n"
             "墨墨会捧着书陪你，头顶显示剩余时间。",
             parent=self.app)
+
+    def _pause_pomo(self):
+        """暂停 / 继续番茄钟（顶栏和桌宠气泡同步显示状态）。"""
+        if not self.app.pomodoro:
+            messagebox.showinfo("🍅 番茄钟",
+                                "当前没有正在进行的番茄钟～",
+                                parent=self.app)
+            return
+        self.app.pause_or_resume_pomodoro()
 
     def _stop_pomo(self):
         """手动结束番茄钟：桌宠头上的倒计时会立刻消失。"""
@@ -2408,6 +2447,24 @@ class SettingsPage(BasePage):
                  bg=c["app_bg"], fg=c["sidebar_muted"],
                  font=font(FS["xs"])).pack(side="left", padx=SP["md"])
 
+        self._section("数据管理")
+        data_row = tk.Frame(self.body, bg=c["app_bg"])
+        data_row.pack(anchor="w", pady=SP["xs"])
+        ModernButton(data_row, text="导出配置", command=self._export_config,
+                     c=c, icon="folder").pack(side="left",
+                                              padx=(SP["none"], SP["sm"]))
+        ModernButton(data_row, text="导入配置", command=self._import_config,
+                     c=c, icon="refresh").pack(side="left",
+                                               padx=(SP["none"], SP["sm"]))
+        ModernButton(data_row, text="清理配置", command=self._clean_config,
+                     c=c, icon="close").pack(side="left")
+        tk.Label(self.body,
+                 text="配置 = 分类 / 计划 / 倒计时 / 主题 / 番茄钟设置。\n"
+                      "清理前会自动备份为 config.json.bak；导入会先校验格式。",
+                 bg=c["app_bg"], fg=c["sidebar_muted"],
+                 font=font(FS["xs"]), justify="left",
+                 anchor="w").pack(anchor="w")
+
         self._section("关于")
         tk.Label(self.body,
                  text=f"墨墨桌面管理助手 {APP_VERSION}\n"
@@ -2417,6 +2474,69 @@ class SettingsPage(BasePage):
                  anchor="w").pack(anchor="w")
 
         self.app.update_topbar(f"当前主题：{THEME_NAMES[self.app.theme_name]}")
+
+    # ---- 数据管理：导出 / 导入 / 清理 ----
+    def _export_config(self):
+        from tkinter import filedialog
+        if not os.path.isfile(self.cfg.path):
+            messagebox.showinfo("导出配置", "还没有 config.json，无需导出～",
+                                parent=self.app)
+            return
+        path = filedialog.asksaveasfilename(
+            parent=self.app, defaultextension=".json",
+            initialfile="momo-config-backup.json",
+            filetypes=[("JSON 配置", "*.json")],
+            title="导出配置到…")
+        if not path:
+            return
+        try:
+            import shutil
+            shutil.copyfile(self.cfg.path, path)
+        except OSError as e:
+            messagebox.showerror("导出失败", str(e), parent=self.app)
+            return
+        messagebox.showinfo("导出完成", f"配置已导出到：\n{path}", parent=self.app)
+
+    def _import_config(self):
+        from tkinter import filedialog
+        path = filedialog.askopenfilename(
+            parent=self.app, filetypes=[("JSON 配置", "*.json")],
+            title="选择要导入的配置文件")
+        if not path:
+            return
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except (OSError, ValueError) as e:
+            messagebox.showerror("导入失败", "文件读不了或不是合法 JSON：\n%s" % e,
+                                 parent=self.app)
+            return
+        if not isinstance(data, dict):
+            messagebox.showerror("导入失败", "文件内容不是配置对象（顶层必须是 {}）",
+                                 parent=self.app)
+            return
+        if not messagebox.askyesno(
+                "导入配置", "将用该文件替换当前全部分类 / 计划 / 倒计时 / 设置，\n"
+                           "当前配置会先备份为 config.json.bak。继续？",
+                parent=self.app):
+            return
+        if not self.cfg.replace_all(data):
+            messagebox.showerror("导入失败", "配置格式非法，未做修改。",
+                                 parent=self.app)
+            return
+        self.app._apply_theme(self.cfg.get_setting("theme", "light"))
+        messagebox.showinfo("导入完成", "配置已导入并生效。", parent=self.app)
+
+    def _clean_config(self):
+        if not messagebox.askyesno(
+                "清理配置", "将清空全部分类 / 计划 / 倒计时 / 设置并恢复默认\n"
+                           "（会先备份为 config.json.bak）。确定？",
+                parent=self.app):
+            return
+        if not self.cfg.replace_all({}):
+            return
+        self.app._apply_theme("light")
+        messagebox.showinfo("清理完成", "已恢复默认配置。", parent=self.app)
 
     def _section(self, text):
         c = self.C

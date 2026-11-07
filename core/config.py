@@ -43,9 +43,13 @@ DEFAULT_CONFIG = {
     "assignments": {},
     # 界面设置（如 theme: light / dark）
     # pomodoro_minutes / pomodoro_break：番茄钟专注与休息时长（分钟）
+    # pomodoro：进行中的番茄钟（重启后恢复；None = 没有在跑）
+    # pomo_stats：{"sessions": 轮数, "focus_minutes": 累计专注分钟}
     "settings": {"theme": "light",
                  "pomodoro_minutes": 45,
-                 "pomodoro_break": 5},
+                 "pomodoro_break": 5,
+                 "pomodoro": None,
+                 "pomo_stats": {"sessions": 0, "focus_minutes": 0}},
     # 专属倒计时（倒数日）：[{id, title, date, note, repeat, created}]
     "countdowns": [],
     # 日程计划（时间管理页）：[{id, title, date, note, done, done_at, created}]
@@ -396,6 +400,39 @@ class ConfigManager:
             if item.get("id") == cid:
                 return item
         return None
+
+    # ---- 番茄钟（状态持久化 + 专注统计）----
+    def save_pomodoro(self, state):
+        """把进行中的番茄钟落盘（start/pause/resume/阶段切换时调用）。
+
+        state 为 None 表示结束并清掉。重启后据此恢复计时，退出不再丢。
+        """
+        self.data["settings"]["pomodoro"] = state
+        self.save()
+
+    def record_pomo(self, minutes: int):
+        """记一轮完成的专注：轮数 +1、累计分钟增加。"""
+        st = self.data["settings"].get("pomo_stats")
+        if not isinstance(st, dict):
+            st = {}
+        try:
+            st["sessions"] = int(st.get("sessions") or 0) + 1
+            st["focus_minutes"] = int(st.get("focus_minutes") or 0) + int(minutes)
+        except (TypeError, ValueError):
+            st = {"sessions": 1, "focus_minutes": int(minutes or 0)}
+        self.data["settings"]["pomo_stats"] = st
+        self.save()
+
+    def replace_all(self, data: dict) -> bool:
+        """整体替换配置（导入用）：校验 + 补全字段后落盘。
+
+        只接受 dict；返回是否成功（非法结构返回 False，调用方提示用户）。
+        """
+        if not isinstance(data, dict):
+            return False
+        self.data = self._fill(json.loads(json.dumps(data)))
+        self.save()
+        return True
 
     # ---- 日程计划（时间管理）----
     @property

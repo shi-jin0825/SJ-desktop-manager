@@ -10,8 +10,10 @@
 具体页面在 gui/pages.py 里实现，这里只负责路由与全局能力
 （主题、桌宠、窗口居中）。
 """
+import ctypes
 import os
 import re
+import time
 import tkinter as tk
 from tkinter import messagebox
 
@@ -67,8 +69,9 @@ class App(tk.Tk):
         self.C = get_theme(self.theme_name)
         self.collapsed = bool(self.config_mgr.get_setting("sidebar_collapsed", False))
         self._pet = None            # 桌面悬浮宠物（None = 未召唤）
-        self.pomodoro = None        # 番茄钟 {"end": 时间戳, "minutes": N}
-        self._pomo_job = None
+        self.pomodoro = None        # 番茄钟 {"phase","end","minutes","break","paused",...}
+        self._pomo_tick_job = None
+        self._quitting = False      # 退出中：桌宠收起的回调不再改写持久化状态
         self.current_key = "home"
         self.current_page = None
         self._photos = []           # 头像等图片引用，防止被回收
@@ -98,6 +101,9 @@ class App(tk.Tk):
         self.bind_all("<MouseWheel>", self._on_wheel)
         self.protocol("WM_DELETE_WINDOW", self._quit)
         self._init_hotkey()
+        self._restore_pomodoro()          # 重启后恢复计时（退出不再丢一轮专注）
+        if self.config_mgr.get_setting("pet_visible", False):
+            self.after(500, self._toggle_pet)   # 召唤状态持久化：重启自动召回墨墨
 
     def _fit_to_screen(self):
         """初始大小不超过屏幕的 90% —— 小屏笔记本上别一启动就顶满屏。"""
@@ -309,6 +315,15 @@ class App(tk.Tk):
                                  fg=self.C["sidebar_muted"],
                                  font=font(FS["xs"]))
         self.page_sub.pack(side="left", padx=SP["xs"])
+        # 番茄钟常驻状态（右侧）：不召唤桌宠也能在任何页面看到剩余时间，
+        # 点击直达时间管理页
+        self._pomo_label = tk.Label(topbar, text="", bg=self.C["topbar_bg"],
+                                    fg=self.C["accent"],
+                                    font=font(FS["sm"], "bold"),
+                                    cursor="hand2")
+        self._pomo_label.pack(side="right", padx=SP["xl"])
+        self._pomo_label.bind("<Button-1>",
+                              lambda e: self._show_page("countdowns"))
         hline(self.main, self.C["divider"], pady=SP["none"])
 
         self.content = tk.Frame(self.main, bg=self.C["app_bg"])
@@ -741,7 +756,7 @@ class App(tk.Tk):
         return getattr(self, "_pet", None) is not None
 
     def _toggle_pet(self):
-        """召唤 / 收起桌面上独立悬浮的墨墨。"""
+        """召唤 / 收起桌面上独立悬浮的墨墨（召唤状态持久化到 config）。"""
         if self.pet_active():
             try:
                 self._pet.on_close()
@@ -750,15 +765,21 @@ class App(tk.Tk):
             return
         from gui.pet import DesktopPet
         self._pet = DesktopPet(self)
+        self.config_mgr.set_setting("pet_visible", True)
 
     def _on_pet_closed(self):
         """桌宠被收起时的回调：同步设置页按钮状态。"""
         self._pet = None
+        # 退出程序时收起桌宠不算「用户主动收起」——保留召唤状态，
+        # 下次启动墨墨还在（_quit 会先置 _quitting）
+        if not getattr(self, "_quitting", False):
+            self.config_mgr.set_setting("pet_visible", False)
         if self.current_key == "settings":
             self._show_page("settings", force=True)   # 按钮文字要重算
 
     # ---------------- 番茄钟 ----------------
     POMO_MIN, POMO_MAX = 1, 600        # 允许自定义的范围（分钟）
+    POMO_TICK_MS = 1000                # 计时心跳：驱动顶栏倒计时 + 阶段切换
 
     @property
     def pomo_minutes(self) -> int:
@@ -791,48 +812,209 @@ class App(tk.Tk):
         return self.pomo_minutes
 
     def start_pomodoro(self, minutes=None, break_minutes=None):
-        """开启番茄钟：桌宠进入伴学状态，头顶显示倒计时。
+        """开启番茄钟：进入专注阶段，落盘 + 启动计时心跳。
 
         minutes 为 None 时使用用户设置好的默认时长。
         """
-        import time as _t
         mins = self.pomo_minutes if minutes is None else int(minutes)
         mins = max(self.POMO_MIN, min(self.POMO_MAX, mins))
         rest = self.pomo_break if break_minutes is None else int(break_minutes)
         rest = max(self.POMO_MIN, min(self.POMO_MAX, rest))
-        self.pomodoro = {"end": _t.time() + mins * 60,
-                         "minutes": mins, "break": rest}
-        if self._pomo_job:
-            try:
-                self.after_cancel(self._pomo_job)
-            except Exception:
-                pass
-        self._pomo_job = self.after(mins * 60 * 1000, self._pomodoro_done)
+        self.pomodoro = {"phase": "focus", "end": time.time() + mins * 60,
+                         "minutes": mins, "break": rest,
+                         "paused": False, "pause_left": 0.0}
+        self.cfg.save_pomodoro(dict(self.pomodoro))
+        self._pomo_start_tick()
+        self._update_pomo_label()
+        self.refresh_pomodoro_ui()
+
+    def pause_pomodoro(self):
+        """暂停：记下剩余秒数，心跳不停（顶栏仍显示「已暂停」）。"""
+        p = self.pomodoro
+        if not p or p.get("paused"):
+            return
+        p["pause_left"] = max(0.0, p["end"] - time.time())
+        p["paused"] = True
+        self.cfg.save_pomodoro(dict(p))
+        self._update_pomo_label()
+        self.refresh_pomodoro_ui()
+
+    def resume_pomodoro(self):
+        """继续：按剩余秒数重新推算结束时刻。"""
+        p = self.pomodoro
+        if not p or not p.get("paused"):
+            return
+        p["end"] = time.time() + p.get("pause_left", 0)
+        p["paused"] = False
+        self.cfg.save_pomodoro(dict(p))
+        self._pomo_start_tick()
+        self._update_pomo_label()
+        self.refresh_pomodoro_ui()
+
+    def pause_or_resume_pomodoro(self):
+        if self.pomodoro and self.pomodoro.get("paused"):
+            self.resume_pomodoro()
+        else:
+            self.pause_pomodoro()
 
     def stop_pomodoro(self):
-        """手动结束：立刻清掉桌宠头上的倒计时气泡。"""
+        """手动结束：清状态（落盘）+ 收起桌宠头上的倒计时。"""
         self.pomodoro = None
-        if self._pomo_job:
-            try:
-                self.after_cancel(self._pomo_job)
-            except Exception:
-                pass
-            self._pomo_job = None
+        self.cfg.save_pomodoro(None)
+        self._pomo_stop_tick()
+        self._update_pomo_label()
         self._pet_pomodoro_end("stop")
 
-    def _pomodoro_done(self):
-        """番茄钟到点：弹窗提醒 + 桌宠气泡庆祝（之后不再显示倒计时）。"""
-        self._pomo_job = None
-        info = self.pomodoro or {}
-        mins = info.get("minutes", self.pomo_minutes)
-        rest = info.get("break", self.pomo_break)
-        self.pomodoro = None
-        self._pet_pomodoro_end("done", mins, rest)
+    # ---- 计时心跳与阶段切换 ----
+    def _pomo_start_tick(self):
+        self._pomo_stop_tick()
+        self._pomo_tick_job = self.after(self.POMO_TICK_MS, self._pomo_tick)
+
+    def _pomo_stop_tick(self):
+        job = getattr(self, "_pomo_tick_job", None)
+        if job:
+            try:
+                self.after_cancel(job)
+            except Exception:
+                pass
+        self._pomo_tick_job = None
+
+    def _pomo_tick(self):
+        self._pomo_tick_job = None
+        p = self.pomodoro
+        if not p:
+            self._update_pomo_label()
+            return
+        if not p.get("paused") and time.time() >= p.get("end", 0):
+            self._pomo_phase_done()
+            return
+        self._update_pomo_label()
+        self._pomo_tick_job = self.after(self.POMO_TICK_MS, self._pomo_tick)
+
+    def _pomo_phase_done(self):
+        """一个阶段（专注 / 休息）到点：提醒 + 询问进入下一阶段。"""
+        p = self.pomodoro or {}
+        phase = p.get("phase", "focus")
+        mins = int(p.get("minutes", self.pomo_minutes))
+        rest = int(p.get("break", self.pomo_break))
+        if phase == "focus":
+            try:
+                self.cfg.record_pomo(mins)      # 记一轮专注（统计页用）
+            except Exception:
+                pass
+            self._pet_pomodoro_end("done", mins, rest)
+            self._alert("🍅 专注完成",
+                        f"{mins} 分钟专注完成！\n\n站起来活动一下，"
+                        f"休息 {rest} 分钟吧～")
+            if messagebox.askyesno(
+                    "☕ 开始休息",
+                    f"现在开始休息 {rest} 分钟吗？\n（休息结束会提醒你）",
+                    parent=self):
+                self.pomodoro = {"phase": "rest",
+                                 "end": time.time() + rest * 60,
+                                 "minutes": mins, "break": rest,
+                                 "paused": False, "pause_left": 0.0}
+                self.cfg.save_pomodoro(dict(self.pomodoro))
+                self._pomo_start_tick()
+            else:
+                self.pomodoro = None
+                self.cfg.save_pomodoro(None)
+        else:
+            self._alert("☕ 休息结束", f"{rest} 分钟休息结束，精神焕发！")
+            if messagebox.askyesno("🍅 下一轮",
+                                   f"开始下一轮专注（{mins} 分钟）吗？",
+                                   parent=self):
+                self.start_pomodoro(mins, rest)
+                return
+            self.pomodoro = None
+            self.cfg.save_pomodoro(None)
+        self._update_pomo_label()
         self.refresh_pomodoro_ui()
-        messagebox.showinfo(
-            "🍅 番茄钟结束",
-            f"专注 {mins} 分钟完成！\n\n站起来活动一下，休息 {rest} 分钟吧～",
-            parent=self)
+
+    def _restore_pomodoro(self):
+        """重启后恢复计时：退出不再丢一轮专注。
+
+        * 暂停中  → 原样恢复成暂停，等手动继续
+        * 未到期  → 继续走表
+        * 已到期  → 退出期间完成的补记统计，并明确告知（不静默）
+        """
+        raw = self.cfg.get_setting("pomodoro")
+        if not isinstance(raw, dict) or not raw.get("end"):
+            return
+        try:
+            state = {"phase": "rest" if raw.get("phase") == "rest" else "focus",
+                     "end": float(raw.get("end")),
+                     "minutes": int(raw.get("minutes") or self.pomo_minutes),
+                     "break": int(raw.get("break") or self.pomo_break),
+                     "paused": bool(raw.get("paused")),
+                     "pause_left": float(raw.get("pause_left") or 0)}
+        except (TypeError, ValueError):
+            self.cfg.save_pomodoro(None)
+            return
+        if state["paused"] or state["end"] > time.time():
+            self.pomodoro = state
+            self._pomo_start_tick()
+            self._update_pomo_label()
+            self.refresh_pomodoro_ui()
+            return
+        # 退出期间已到点
+        self.cfg.save_pomodoro(None)
+        if state["phase"] == "focus":
+            try:
+                self.cfg.record_pomo(state["minutes"])
+            except Exception:
+                pass
+            self._alert("🍅 番茄钟补签",
+                        f"你有一个 {state['minutes']} 分钟的番茄钟\n"
+                        "在程序关闭期间完成了，已补记到统计里！")
+
+    def _alert(self, title, msg):
+        """番茄钟到点提醒：声音 + 任务栏闪烁 + 窗口藏着时自动唤起。
+
+        不再只靠一个模态弹窗——窗口被热键藏到后台时弹窗根本看不见。
+        """
+        try:
+            ctypes.windll.user32.MessageBeep(0x00000040)   # MB_ICONASTERISK
+        except Exception:
+            pass
+        try:
+            if self._hidden or str(self.state()) == "withdrawn":
+                self.deiconify()
+                self.lift()
+                self._hidden = False
+        except tk.TclError:
+            pass
+        try:   # 任务栏图标闪烁：窗口在别的窗口后面也能引起注意
+            ctypes.windll.user32.FlashWindow(int(self.winfo_id()), True)
+        except Exception:
+            pass
+        try:
+            messagebox.showinfo(title, msg, parent=self)
+        except Exception:
+            pass
+
+    def _update_pomo_label(self):
+        """顶栏右侧的番茄钟状态：任何页面都看得见剩余时间。"""
+        lab = getattr(self, "_pomo_label", None)
+        if lab is None:
+            return
+        text = ""
+        p = self.pomodoro
+        try:
+            if p:
+                if p.get("paused"):
+                    text = "⏸ 番茄钟已暂停"
+                else:
+                    left = max(0, int(p.get("end", 0) - time.time()))
+                    m, s = divmod(left, 60)
+                    icon = "☕ 休息 " if p.get("phase") == "rest" else "🍅 "
+                    text = f"{icon}{m:02d}:{s:02d}"
+        except Exception:
+            text = ""
+        try:
+            lab.config(text=text)
+        except tk.TclError:
+            pass
 
     def _pet_pomodoro_end(self, kind, minutes=0, break_minutes=0):
         kind = "done" if kind == "done" else "stop"
@@ -881,6 +1063,8 @@ class App(tk.Tk):
 
     def _quit(self):
         if messagebox.askyesno("退出", f"确定要退出{APP_TITLE}吗？"):
+            self._quitting = True
+            self._pomo_stop_tick()
             try:
                 self.hk.unregister()
             except Exception:

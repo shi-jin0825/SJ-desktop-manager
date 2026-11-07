@@ -371,5 +371,72 @@ class SaveErrorTest(unittest.TestCase):
             self.assertEqual(json.load(f)["settings"]["theme"], "dark")
 
 
+class PomodoroPersistTest(unittest.TestCase):
+    """番茄钟状态落盘 / 恢复 / 统计累加。"""
+
+    def setUp(self):
+        self.dir = tempfile.mkdtemp()
+        self.path = os.path.join(self.dir, "config.json")
+        self.cm = ConfigManager(self.path)
+
+    def tearDown(self):
+        shutil.rmtree(self.dir, ignore_errors=True)
+
+    def test_save_and_restore_roundtrip(self):
+        state = {"phase": "focus", "end": 1234567890.0, "minutes": 25,
+                 "break": 5, "paused": False, "pause_left": 0.0}
+        self.cm.save_pomodoro(state)
+        cm2 = ConfigManager(self.path)          # 模拟重启后重新加载
+        self.assertEqual(cm2.get_setting("pomodoro"), state)
+
+    def test_save_none_clears(self):
+        self.cm.save_pomodoro({"end": 1.0})
+        self.cm.save_pomodoro(None)
+        cm2 = ConfigManager(self.path)
+        self.assertIsNone(cm2.get_setting("pomodoro"))
+
+    def test_record_pomo_accumulates(self):
+        self.cm.record_pomo(25)
+        self.cm.record_pomo(45)
+        st = self.cm.get_setting("pomo_stats")
+        self.assertEqual(st["sessions"], 2)
+        self.assertEqual(st["focus_minutes"], 70)
+
+    def test_record_pomo_survives_garbage(self):
+        self.cm.data["settings"]["pomo_stats"] = "garbage"
+        self.cm.record_pomo(30)
+        self.assertEqual(self.cm.get_setting("pomo_stats"),
+                         {"sessions": 1, "focus_minutes": 30})
+
+
+class ReplaceAllTest(unittest.TestCase):
+    """导入替换：合法 dict 生效并补全字段，非法结构拒绝。"""
+
+    def setUp(self):
+        self.dir = tempfile.mkdtemp()
+        self.path = os.path.join(self.dir, "config.json")
+        self.cm = ConfigManager(self.path)
+
+    def tearDown(self):
+        shutil.rmtree(self.dir, ignore_errors=True)
+
+    def test_replace_dict_fills_defaults(self):
+        self.assertTrue(self.cm.replace_all({"categories": ["A"]}))
+        self.assertEqual(self.cm.categories, ["A"])
+        # 缺省的字段补回默认（settings / plans 等），不 KeyError
+        self.assertIn("theme", self.cm.settings)
+        self.assertEqual(self.cm.plans, [])
+        cm2 = ConfigManager(self.path)          # 落盘可重载
+        self.assertEqual(cm2.categories, ["A"])
+
+    def test_replace_non_dict_rejected(self):
+        self.cm.add_category("原有")
+        self.assertFalse(self.cm.replace_all([1, 2, 3]))
+        self.assertFalse(self.cm.replace_all("junk"))
+        # 未被破坏：默认 3 类 + 新增的「原有」都在
+        self.assertEqual(self.cm.categories,
+                         ["工具", "办公", "娱乐", "原有"])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
