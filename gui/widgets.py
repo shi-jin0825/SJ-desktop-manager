@@ -15,7 +15,7 @@ from tkinter import messagebox
 
 from gui.navicons import ICONS, IconLabel, draw_icon
 from gui import fonts
-from gui.tokens import BAR_H, BTN_H_LG, BTN_PAD, FS, SP, px
+from gui.tokens import BAR_H, BTN_H_LG, BTN_PAD, CHECKBOX, FS, SP, px
 
 
 # ---- 颜色小工具（渐变按钮用）----
@@ -463,6 +463,59 @@ class RoundedEntry(tk.Canvas):
         """供外部调用：把光标放到输入框里。"""
         self.entry.focus_set()
         return self
+
+
+class RoundedCheck(tk.Frame):
+    """自绘圆角勾选框：替代原生 Checkbutton（高分屏上只有 ~13px，看不清）。
+
+    勾选蓝底白勾、未勾选灰底描边，尺寸统一走 tokens.CHECKBOX——此前
+    项目里 20 / 24 / 原生 13px 三套混用，现在只有一处定值。
+    框和文字（整行）都可点；Tk 事件不冒泡到父控件，所以逐个绑定。
+    """
+
+    def __init__(self, master, c, text="", variable=None, command=None,
+                 bg=None, font_size=None):
+        c = dict(c or {})
+        self.c = c
+        self.bg = bg or c.get("app_bg", "#eeeeee")
+        self.var = variable if variable is not None \
+            else tk.BooleanVar(master=master)
+        self.command = command
+        super().__init__(master, bg=self.bg, cursor="hand2")
+
+        s = CHECKBOX
+        self._cv = tk.Canvas(self, width=s, height=s, bg=self.bg,
+                             highlightthickness=0, cursor="hand2")
+        self._cv.pack(side="left", padx=(SP["none"], SP["sm"]))
+        if text:
+            tk.Label(self, text=text, bg=self.bg, fg=c.get("text", "#222222"),
+                     font=fonts.font(font_size or FS["sm"]),
+                     cursor="hand2").pack(side="left")
+        self._draw()
+        # 整行可点：Frame 自己 + Canvas + Label 都要绑（Tk 事件不冒泡）
+        for w in (self, self._cv, *self.winfo_children()):
+            w.bind("<Button-1>", self._toggle)
+
+    def _draw(self):
+        c, s = self.c, CHECKBOX
+        self._cv.delete("all")
+        r = max(px(4), s // 5)
+        if self.var.get():
+            rounded_rect(self._cv, 1, 1, s - 1, s - 1, r,
+                         fill=c["accent"], outline="")
+            self._cv.create_line(s * 0.26, s * 0.52, s * 0.44, s * 0.70,
+                                 s * 0.74, s * 0.30, fill="white",
+                                 width=max(2, px(2)), capstyle="round",
+                                 joinstyle="round", smooth=True)
+        else:
+            rounded_rect(self._cv, 1, 1, s - 1, s - 1, r,
+                         fill=c["panel_bg"], outline=c["divider"], width=1)
+
+    def _toggle(self, _=None):
+        self.var.set(not self.var.get())
+        self._draw()
+        if self.command is not None:
+            self.command()
 
 
 def hover_card(tile, children, c, base_bg, hover_bg, grow=6, shadow=None,

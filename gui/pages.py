@@ -23,7 +23,7 @@ from gui.tokens import BAR_H, BTN_H_SM, FS, SP, px
 from gui.widgets import (open_target, make_photo, rounded_rect, short_name,
                          center_window, dialog_header, fit_text, hline,
                          stat_bar, shrink, ModernButton, hover_card,
-                         ScrolledFrame)
+                         RoundedCheck, ScrolledFrame)
 
 # ---- 磁贴尺寸（基准值；网格变宽时整体按倍率放大） ----
 # 全部过 px()：高 DPI 下 Tk 把字号放大了，磁贴 / 图标不同步的话文字装不下
@@ -76,7 +76,7 @@ MAX_PREVIEW = PREVIEW_COLS ** 2
 
 UNDO_DEPTH = 10         # 「撤销上一步」最多记住几步整理操作
 
-APP_VERSION = "v1.12.4"      # 设置页「关于」显示；发版时跟着更新日志一起改
+APP_VERSION = "v1.12.5"      # 设置页「关于」显示；发版时跟着更新日志一起改
 KIND_LABEL = {"shortcut": "快捷方式", "dir": "文件夹", "file": "文件"}
 
 
@@ -1287,14 +1287,10 @@ class CountdownDialog(tk.Toplevel):
         self._date_row(form, 1)
         self._row(form, "备注", self.var_note, 3)
 
-        tk.Checkbutton(self, text="每年循环（生日 / 纪念日）",
-                       variable=self.var_repeat,
-                       font=font(FS["xs"]),
-                       bg=c["dialog_bg"], fg=c["text"],
-                       selectcolor=c["panel_bg"],
-                       activebackground=c["dialog_bg"],
-                       activeforeground=c["text"],
-                       highlightthickness=0, bd=0).pack(anchor="w", padx=SP["xl"], pady=(SP["sm"], SP["none"]))
+        RoundedCheck(self, c, text="每年循环（生日 / 纪念日）",
+                     variable=self.var_repeat,
+                     bg=c["dialog_bg"]).pack(anchor="w", padx=SP["xl"],
+                                             pady=(SP["sm"], SP["none"]))
 
         btns = tk.Frame(self, bg=c["dialog_bg"])
         btns.pack(pady=SP["lg"])
@@ -1474,38 +1470,10 @@ class PlanDialog(tk.Toplevel):
         self._date_row(form, 1)
         self._row(form, "备注", self.var_note, 3)
 
-        nodate_row = tk.Frame(self, bg=c["dialog_bg"], cursor="hand2")
-        nodate_row.pack(anchor="w", padx=SP["xl"], pady=(SP["sm"], SP["none"]))
-        s = px(24)   # 自绘勾选框：px(24) 才够显眼（原生 Checkbutton 太小看不清）
-        nodate_cv = tk.Canvas(nodate_row, width=s, height=s, bg=c["dialog_bg"],
-                              highlightthickness=0, cursor="hand2")
-        nodate_cv.pack(side="left", padx=(SP["none"], SP["sm"]))
-        tk.Label(nodate_row, text="不限定日期（随时可做的待办）",
-                 bg=c["dialog_bg"], fg=c["text"],
-                 font=font(FS["sm"])).pack(side="left")
-
-        def draw_nodate():
-            nodate_cv.delete("all")
-            r = max(px(4), s // 5)
-            if self.var_nodate.get():
-                rounded_rect(nodate_cv, 1, 1, s - 1, s - 1, r, fill=c["accent"],
-                             outline="")
-                nodate_cv.create_line(s * 0.26, s * 0.52, s * 0.44, s * 0.70,
-                                      s * 0.74, s * 0.30, fill="white",
-                                      width=max(2, px(2)), capstyle="round",
-                                      joinstyle="round", smooth=True)
-            else:
-                rounded_rect(nodate_cv, 1, 1, s - 1, s - 1, r, fill=c["panel_bg"],
-                             outline=c["divider"], width=1)
-
-        def toggle_nodate(_=None):
-            self.var_nodate.set(not self.var_nodate.get())
-            draw_nodate()
-            self._sync_nodate()
-
-        draw_nodate()
-        nodate_cv.bind("<Button-1>", toggle_nodate)
-        nodate_row.bind("<Button-1>", toggle_nodate)
+        RoundedCheck(self, c, text="不限定日期（随时可做的待办）",
+                     variable=self.var_nodate, command=self._sync_nodate,
+                     bg=c["dialog_bg"]).pack(anchor="w", padx=SP["xl"],
+                                             pady=(SP["sm"], SP["none"]))
 
         btns = tk.Frame(self, bg=c["dialog_bg"])
         btns.pack(pady=SP["lg"])
@@ -1732,15 +1700,10 @@ class PomodoroDialog(tk.Toplevel):
                 side="left", padx=SP["xs"])
 
         self.var_remember = tk.BooleanVar(value=True)
-        tk.Checkbutton(self, text="记住为默认时长（下次直接开始）",
-                       variable=self.var_remember,
-                       font=font(FS["xs"]),
-                       bg=c["dialog_bg"], fg=c["text"],
-                       selectcolor=c["panel_bg"],
-                       activebackground=c["dialog_bg"],
-                       activeforeground=c["text"],
-                       highlightthickness=0, bd=0).pack(anchor="w", padx=SP["xl"],
-                                                        pady=(SP["xs"], SP["xs"]))
+        RoundedCheck(self, c, text="记住为默认时长（下次直接开始）",
+                     variable=self.var_remember,
+                     bg=c["dialog_bg"]).pack(anchor="w", padx=SP["xl"],
+                                             pady=(SP["xs"], SP["xs"]))
 
         btns = tk.Frame(self, bg=c["dialog_bg"])
         btns.pack(pady=(SP["md"], SP["lg"]))
@@ -2012,33 +1975,15 @@ class CountdownPage(BasePage):
         self._card_buttons(card, acts)
 
     def _check_box(self, parent, item):
-        """自绘勾选框（原生 Checkbutton 的主题适配太丑）：点一下完成 / 重做。"""
-        c = self.C
-        s = px(20)
-        cv = tk.Canvas(parent, width=s, height=s, bg=c["card_bg"],
-                       highlightthickness=0, cursor="hand2")
+        """完成 / 重做勾选框：点一下翻面（公共组件 RoundedCheck）。"""
+        var = tk.BooleanVar(value=bool(item.get("done")))
 
-        def draw():
-            cv.delete("all")
-            r = max(px(4), s // 5)
-            if item.get("done"):
-                rounded_rect(cv, 1, 1, s - 1, s - 1, r, fill=c["accent"],
-                             outline="")
-                cv.create_line(s * 0.26, s * 0.52, s * 0.44, s * 0.70,
-                               s * 0.74, s * 0.30, fill="white",
-                               width=max(2, px(2)), capstyle="round",
-                               joinstyle="round", smooth=True)
-            else:
-                rounded_rect(cv, 1, 1, s - 1, s - 1, r, fill=c["panel_bg"],
-                             outline=c["divider"], width=1)
-
-        def toggle(_=None):
-            self.cfg.update_plan(item.get("id"), done=not item.get("done"))
+        def toggle():
+            self.cfg.update_plan(item.get("id"), done=var.get())
             self.refresh()
 
-        draw()
-        cv.bind("<Button-1>", toggle)
-        return cv
+        return RoundedCheck(parent, self.C, variable=var, command=toggle,
+                            bg=self.C["card_bg"])
 
     # ---- 拖拽排序 ----
     def _drag_start(self, event, pid):
@@ -2416,29 +2361,19 @@ class SettingsPage(BasePage):
         monitor_row.pack(anchor="w", pady=SP["xs"])
         self._monitor_var = tk.BooleanVar(
             value=bool(self.app.cfg.get_setting("pet_monitor", True)))
-        tk.Checkbutton(monitor_row, text="系统状态联动（CPU 高冒汗 / "
-                                         "内存不足疲惫 / 网速快奔跑）",
-                       variable=self._monitor_var, command=self._toggle_monitor,
-                       font=font(FS["xs"]),
-                       bg=c["app_bg"], fg=c["text"],
-                       selectcolor=c["panel_bg"],
-                       activebackground=c["app_bg"],
-                       activeforeground=c["text"],
-                       highlightthickness=0, bd=0).pack(side="left")
+        RoundedCheck(monitor_row, c,
+                     text="系统状态联动（CPU 高冒汗 / 内存不足疲惫 / 网速快奔跑）",
+                     variable=self._monitor_var, command=self._toggle_monitor,
+                     bg=c["app_bg"]).pack(side="left")
 
         self._section("全局热键")
         hk_top = tk.Frame(self.body, bg=c["app_bg"])
         hk_top.pack(anchor="w", pady=SP["xs"])
         self._hk_var = tk.BooleanVar(
             value=bool(self.app.cfg.get_setting("hotkey_enabled", True)))
-        tk.Checkbutton(hk_top, text="启用全局热键（窗口隐藏时也能一键呼出）",
-                       variable=self._hk_var, command=self._toggle_hotkey,
-                       font=font(FS["xs"]),
-                       bg=c["app_bg"], fg=c["text"],
-                       selectcolor=c["panel_bg"],
-                       activebackground=c["app_bg"],
-                       activeforeground=c["text"],
-                       highlightthickness=0, bd=0).pack(side="left")
+        RoundedCheck(hk_top, c, text="启用全局热键（窗口隐藏时也能一键呼出）",
+                     variable=self._hk_var, command=self._toggle_hotkey,
+                     bg=c["app_bg"]).pack(side="left")
 
         hk_row = tk.Frame(self.body, bg=c["app_bg"])
         hk_row.pack(anchor="w", pady=SP["xs"])
