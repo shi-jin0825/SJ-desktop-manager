@@ -24,7 +24,7 @@ from gui.tokens import BAR_H, BTN_H_SM, FS, SP, px
 from gui.widgets import (open_target, make_photo, rounded_rect, short_name,
                          center_window, dialog_header, fit_text, hline,
                          stat_bar, shrink, ModernButton, hover_card,
-                         RoundedCheck, ScrolledFrame)
+                         RoundedCheck, RoundedEntry, ScrolledFrame)
 
 # ---- 磁贴尺寸（基准值；网格变宽时整体按倍率放大） ----
 # 全部过 px()：高 DPI 下 Tk 把字号放大了，磁贴 / 图标不同步的话文字装不下
@@ -77,7 +77,7 @@ MAX_PREVIEW = PREVIEW_COLS ** 2
 
 UNDO_DEPTH = 10         # 「撤销上一步」最多记住几步整理操作
 
-APP_VERSION = "v1.13.1"      # 设置页「关于」显示；发版时跟着更新日志一起改
+APP_VERSION = "v1.13.2"      # 设置页「关于」显示；发版时跟着更新日志一起改
 KIND_LABEL = {"shortcut": "快捷方式", "dir": "文件夹", "file": "文件"}
 
 
@@ -1849,6 +1849,125 @@ class HotkeyDialog(tk.Toplevel):
             self.on_save(0, 0)
 
 
+class AIChatDialog(tk.Toplevel):
+    """AI 助手对话窗口：聊天气泡 + 底部输入框 + 发送按钮。
+
+    与主界面同一套配色 / 字体 / 圆角控件，风格完全统一。
+    发送走 App.ask_momo（子线程发请求 + 主线程回调），界面不卡死；
+    支持回车发送、发送按钮点击发送；断网 / 无 Key 时墨墨友好兜底。
+    """
+
+    W, H = px(520), px(600)
+    CHAT_MAX_W = px(400)   # 气泡最大宽度（再宽就换行）
+
+    def __init__(self, master, app):
+        super().__init__(master)
+        self.app = app
+        c = self.C = get_theme(getattr(app, "theme_name", DEFAULT_THEME))
+        self.title("🤖 墨墨 AI 助手")
+        center_window(self, self.W, self.H, master)
+        self.configure(bg=c["dialog_bg"])
+        self.minsize(px(360), px(420))
+
+        dialog_header(self, c, "🤖 墨墨 AI 助手",
+                      "有问题尽管问，墨墨帮你想想～")
+
+        # ---- 聊天区（可滚动气泡画布）----
+        self._chat_scroll = ScrolledFrame(self, c, padx=SP["lg"],
+                                          pady=(SP["none"], SP["sm"]))
+        self._chat_scroll.pack(fill="both", expand=True, padx=SP["none"])
+        self._chat = self._chat_scroll.body
+        self._y = 0
+        self._bubble("🤖 嗨！我是墨墨，问点什么吧～")
+
+        # ---- 底部输入区：输入框 + 发送按钮 ----
+        bar = tk.Frame(self, bg=c["dialog_bg"])
+        bar.pack(fill="x", padx=SP["lg"], pady=(SP["sm"], SP["lg"]))
+        self._entry = RoundedEntry(
+            bar, c, icon="pet",
+            on_return=self._on_send, on_escape=self._on_close)
+        self._entry.pack(side="left", fill="x", expand=True,
+                         padx=(SP["none"], SP["sm"]))
+        self._send_btn = ModernButton(bar, text="发送", command=self._on_send,
+                                      c=c, primary=True, icon="pet",
+                                      bg=c["dialog_bg"])
+        self._send_btn.pack(side="right")
+
+        self._busy = False
+        try:
+            self.transient(master)
+        except tk.TclError:
+            pass
+        self.after(50, self._entry.focus_set)
+        self.protocol("WM_DELETE_WINDOW", self._on_close)
+
+    # ---- 气泡渲染 ----
+    def _bubble(self, text, who="momo"):
+        """往聊天区追加一条气泡。who="me" 靠右强调色，否则靠左灰底。"""
+        c = self.C
+        is_me = who == "me"
+        # 用 Label 的 wraplength 自动换行；气泡底色直接铺在 Label 上，
+        # 左右靠 padx 撑到一边，实现「左灰右蓝」的对齐效果。
+        holder = tk.Frame(self._chat, bg=c["dialog_bg"])
+        holder.pack(fill="x", pady=SP["xs"])
+        lbl = tk.Label(holder, text=text, justify="left",
+                       font=font(FS["sm"]),
+                       bg=c["accent"] if is_me else c["panel_bg"],
+                       fg=c["accent_fg"] if is_me else c["text"],
+                       wraplength=self.CHAT_MAX_W - px(28),
+                       padx=px(14), pady=px(10))
+        lbl.pack(side="right" if is_me else "left",
+                 padx=(px(60), SP["none"]) if is_me
+                 else (SP["none"], px(60)))
+
+        # 滚到底
+        self._chat.update_idletasks()
+        self._chat_scroll.canvas.yview_moveto(1.0)
+
+    def _on_send(self, _=None):
+        question = (self._entry.var.get() or "").strip()
+        if not question or self._busy:
+            return
+        self._entry.var.set("")
+        self._bubble(question, "me")
+        self._busy = True
+        self._set_send_enabled(False)
+        self._bubble("墨墨正在思考中…", "momo")
+        # 关键：走主窗口的 ask_momo，子线程发请求、主线程回调刷新
+        self.app.ask_momo(
+            question,
+            on_done=self._on_reply,
+        )
+
+    def _on_reply(self, answer):
+        """子线程拿到结果后切回主线程：替换「思考中」为最终回复。"""
+        self._busy = False
+        self._set_send_enabled(True)
+        self._replace_last(answer)
+
+    def _replace_last(self, text):
+        """把最后一条（思考中）气泡替换成最终回答。"""
+        c = self.C
+        # 销毁最后一条气泡 Label（holder 是最后 pack 的 Frame 子项）
+        children = self._chat.winfo_children()
+        for w in reversed(children):
+            if isinstance(w, tk.Frame):
+                for sub in w.winfo_children():
+                    sub.destroy()
+                w.destroy()
+                break
+        self._bubble(text, "momo")
+
+    def _set_send_enabled(self, on):
+        try:
+            self._send_btn.set_enabled(on)
+        except (tk.TclError, AttributeError):
+            pass
+
+    def _on_close(self, _=None):
+        self.destroy()
+
+
 class CountdownPage(BasePage):
     key = "countdowns"            # 历史遗留 key，改名后不动（config 兼容）
     title = "时间管理"
@@ -2447,6 +2566,15 @@ class SettingsPage(BasePage):
                  bg=c["app_bg"], fg=c["sidebar_muted"],
                  font=font(FS["xs"])).pack(side="left", padx=SP["md"])
 
+        self._section("AI 助手")
+        ai_row = tk.Frame(self.body, bg=c["app_bg"])
+        ai_row.pack(anchor="w", pady=SP["xs"])
+        ModernButton(ai_row, text="打开对话", command=self._open_ai_chat,
+                     c=c, icon="search", primary=True).pack(side="left")
+        tk.Label(ai_row, text="跟墨墨聊天，接入智谱 GLM（免费模型 glm-4-flash）",
+                 bg=c["app_bg"], fg=c["sidebar_muted"],
+                 font=font(FS["xs"])).pack(side="left", padx=SP["md"])
+
         self._section("数据管理")
         data_row = tk.Frame(self.body, bg=c["app_bg"])
         data_row.pack(anchor="w", pady=SP["xs"])
@@ -2544,6 +2672,10 @@ class SettingsPage(BasePage):
                  font=font(FS["sm"], "bold"), anchor="w").pack(
             fill="x", pady=(SP["lg"], SP["xs"]))
         hline(self.body, c["divider"], pady=(SP["none"], SP["sm"]))
+
+    def _open_ai_chat(self):
+        """打开 AI 助手对话窗口。"""
+        AIChatDialog(self.app, self.app)
 
     def _toggle_pomodoro(self):
         if self.app.pomodoro:
