@@ -117,6 +117,53 @@ python tools/build_exe.py --dir  # 或打包成目录（启动更快）
 这个 exe 单文件、免安装，拷到任何一台 Windows 电脑双击即可运行
 （不需要装 Python，图标与 `assets/` 已一并打进去）。
 
+## AI 对话（智谱 GLM 大模型）
+
+墨墨接入了智谱 AI 的免费模型 `glm-4-flash`，调用代码封装在
+`core/ai_client.py` 里（`ask_ai(question, system_prompt)` 函数），
+**网络请求绝不混在 UI 主程序里**；UI 侧通过 `App.ask_momo(...)` 起
+子线程发请求、主线程刷新界面，不会出现「未响应」。
+
+### 配置 API Key（必读）
+
+Key 从环境变量 `ZHIPU_API_KEY` 读取，**不要写进源码**。配置方法：
+
+1. 到 [智谱开放平台](https://open.bigmodel.cn/) 注册并创建 API Key
+   （免费模型 `glm-4-flash` 有免费额度）。
+2. 设置环境变量（三选一）：
+
+   - **PowerShell（当前用户，永久）**
+     ```powershell
+     [Environment]::SetEnvironmentVariable("ZHIPU_API_KEY", "你的Key", "User")
+     ```
+   - **CMD（当前用户，永久）**
+     ```cmd
+     setx ZHIPU_API_KEY "你的Key"
+     ```
+   - **代码里临时设置（仅当前进程）**
+     ```python
+     import os
+     os.environ["ZHIPU_API_KEY"] = "你的Key"
+     ```
+
+3. **重启程序**让环境变量生效，即可开始对话。
+
+未配置 Key、断网、Key 无效或余额不足时，墨墨会友好地回一句
+「墨墨现在有点头晕（网络错误）」之类的提示，**程序不会崩溃**。
+
+### 调用方式
+
+```python
+from core.ai_client import ask_ai
+
+# 子线程里调用（1-3 秒），返回文本
+answer = ask_ai("帮我写一句今日待办", "你是桌面助手墨墨")
+```
+
+UI 集成示例见 `tools/ai_demo.py`（直接 `py -3 tools/ai_demo.py` 可跑），
+核心三步：输入框 + 按钮 → `App.ask_momo(问题, on_start=显示思考中,
+on_done=显示回复)` → 气泡/弹窗展示。
+
 ## 数据安全
 
 `config.json` 存着你所有的分类、归类关系和倒计时，写入方式做了三重保险：
@@ -158,6 +205,7 @@ SJ-desktop-manager/
 │   ├── icons.py           # 系统图标提取（Shell COM + 纯标准库 PNG 编码 + LRU 缓存）
 │   ├── sysinfo.py         # 系统状态采集（CPU/内存/网速，ctypes 直调 Win32，喂桌宠）
 │   ├── hotkey.py          # 全局热键（RegisterHotKey + WM_HOTKEY 过滤轮询）
+│   ├── ai_client.py       # 智谱 GLM 大模型调用（独立封装，网络请求不进 UI）
 │   ├── dpi.py             # 高 DPI 感知声明
 │   └── undo.py            # 多步撤销栈（纯逻辑，不依赖 tkinter）
 ├── gui/
@@ -172,11 +220,13 @@ SJ-desktop-manager/
 │   └── pet.py             # 桌面悬浮宠物（物理引擎 / 系统联动 / 番茄钟）
 ├── tools/
 │   ├── build_exe.py       # PyInstaller 一键打包成 exe
+│   ├── ai_demo.py         # AI 对话 UI 集成示例（输入框 + 对话按钮 + 气泡）
 │   ├── make_icon.py       # 合成备选 .ico 图标
 │   ├── mascot_to_ico.py   # 吉祥物图 -> 应用 .ico
 │   └── make_shortcut.py   # 创建/更新桌面快捷方式
 ├── tests/
 │   ├── test_core.py       # core 层单测（倒计时 / 配置 / 撤销栈 / 图标缓存 key）
+│   ├── test_ai_client.py  # AI 客户端单测（Key 读取 / 请求体 / 兜底文案）
 │   ├── test_gui.py        # gui 层单测（字体解析 / 胶囊按钮）
 │   └── test_design.py     # 设计令牌守护（间距 / 字号不许再写散值）
 ├── assets/                # 图标、吉祥物图与截图
@@ -202,6 +252,17 @@ python -m unittest discover -s tests -v
 MIT，见 [LICENSE](LICENSE)。
 
 ## 更新日志
+
+### v1.13.1 — 接入智谱 GLM 大模型（AI 对话）
+
+- 新增 `core/ai_client.py`：独立封装 `ask_ai(question, system_prompt)`，
+  默认模型 `glm-4-flash`，网络请求与 UI 完全解耦
+- `gui/app.py` 新增 `App.ask_momo(...)`：子线程发请求 + 主线程回调刷新，
+  界面不卡死；`on_start`/`on_done` 两个回调控制「思考中…」与结果展示
+- 全链路异常兜底：未配 Key / 断网 / Key 无效 / 余额不足均返回友好提示，
+  不崩溃
+- API Key 走环境变量 `ZHIPU_API_KEY`（见「AI 对话」章节）
+- 新增 UI 集成示例 `tools/ai_demo.py` 与单测 `tests/test_ai_client.py`
 
 ### v1.13.0 — 番茄钟 2.0：持久化 / 暂停恢复 / 休息阶段 + 数据闭环
 

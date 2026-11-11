@@ -13,6 +13,7 @@
 import ctypes
 import os
 import re
+import threading
 import time
 import tkinter as tk
 from tkinter import messagebox
@@ -993,7 +994,29 @@ class App(tk.Tk):
         except Exception:
             pass
 
-    def _update_pomo_label(self):
+    # ---------------- AI 对话 ----------------
+    def ask_momo(self, question, on_done=None, on_start=None):
+        """主窗口级 AI 入口：子线程发请求，回调刷新 UI，不卡界面。
+
+        on_start(text)：请求发出前在主线程回调（用于显示「思考中…」）。
+        on_done(text)：拿到结果后在主线程回调（用于显示回复）。
+
+        线程安全：子线程里拿到结果后用 self.after(0, ...) 切回主线程，
+        绝不从子线程直接碰任何 Tk 控件。
+        """
+        def _worker():
+            from core.ai_client import ask_ai   # 延迟导入，避免模块加载开销
+            answer = ask_ai(question)
+            # 切回主线程刷新 UI
+            try:
+                self.after(0, lambda: on_done(answer) if on_done else None)
+            except tk.TclError:
+                pass   # 窗口已关闭，忽略
+
+        if on_start:
+            on_start()
+        threading.Thread(target=_worker, daemon=True).start()
+
         """顶栏右侧的番茄钟状态：任何页面都看得见剩余时间。"""
         lab = getattr(self, "_pomo_label", None)
         if lab is None:
