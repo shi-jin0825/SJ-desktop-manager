@@ -16,6 +16,23 @@ except ImportError:               # 精简版 Python / 无 GUI 的 CI 环境
     tk = None
 
 _ROOT = None
+_NO_DISPLAY = False
+
+
+def _probe_display():
+    """探测能否真正创建 Tk 根窗口（ubuntu CI 装了 tkinter 但无 DISPLAY）。"""
+    if tk is None:
+        return False
+    try:
+        r = tk.Tk()
+        r.withdraw()
+        r.destroy()
+        return True
+    except tk.TclError:
+        return False
+
+
+_NO_DISPLAY = not _probe_display()
 
 
 def _root():
@@ -26,7 +43,9 @@ def _root():
         _ROOT.withdraw()
     return _ROOT
 
-require_tk = unittest.skipIf(tk is None, "当前 Python 没有 tkinter，跳过 GUI 用例")
+require_tk = unittest.skipIf(
+    tk is None or _NO_DISPLAY,
+    "当前环境无可用显示（缺 tkinter 或 headless CI），跳过 GUI 用例")
 
 
 @require_tk
