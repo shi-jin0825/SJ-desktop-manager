@@ -208,8 +208,10 @@ class ConfigTest(unittest.TestCase):
                 self.path = path
                 self.name = os.path.basename(path)
 
-        items = [Item(r"C:\Desktop\a.txt"), Item(r"C:\Desktop\b.txt"),
-                 Item(r"C:\Desktop\c.txt")]
+        # 用 os.path.join 构造平台无关路径，Windows / Linux 都能跑
+        items = [Item(os.path.join("X", "Desktop", "a.txt")),
+                 Item(os.path.join("X", "Desktop", "b.txt")),
+                 Item(os.path.join("X", "Desktop", "c.txt"))]
         cm.assign_batch([i.path for i in items[:2]], "工具")
         cm.assign_batch([items[2].path], "娱乐")
 
@@ -226,15 +228,15 @@ class ConfigTest(unittest.TestCase):
                 self.name = os.path.basename(path)
 
         # assignments 里有一条指向「已经不在扫描结果里」的路径
-        cm.assign(r"C:\Desktop\旧路径.txt", "工具")
-        items = [Item(r"C:\Desktop\现在只有这个.txt")]
+        cm.assign(os.path.join("X", "Desktop", "旧路径.txt"), "工具")
+        items = [Item(os.path.join("X", "Desktop", "现在只有这个.txt"))]
         # 现在这个项没归类，旧路径对不上 → 计数应为空
         self.assertEqual(cm.category_counts(items), {})
 
     def test_reconcile_relinks_by_basename(self):
         """路径对不上但文件名还在：按 basename 重关联，别让归类静默归零。"""
         cm = ConfigManager(self.path)
-        cm.assign(r"C:\Desktop\a.txt", "工具")   # 旧路径
+        cm.assign(os.path.join("X", "Desktop", "a.txt"), "工具")   # 旧路径
 
         class Item(object):
             def __init__(self, path):
@@ -242,22 +244,23 @@ class ConfigTest(unittest.TestCase):
                 self.name = os.path.basename(path)
 
         # 文件被移动：路径变了，但 basename 仍是 a.txt
-        items = [Item(r"D:\新位置\a.txt")]
+        new_path = os.path.join("Y", "新位置", "a.txt")
+        items = [Item(new_path)]
         self.assertEqual(cm.reconcile_assignments(items), 1)
-        self.assertEqual(cm.get_category(r"D:\新位置\a.txt"), "工具")
+        self.assertEqual(cm.get_category(new_path), "工具")
         self.assertEqual(cm.unresolved_count, 0)
 
     def test_reconcile_marks_unresolved(self):
         """连 basename 都对不上的归类：计入待重新关联，而非静默显示 0。"""
         cm = ConfigManager(self.path)
-        cm.assign(r"C:\Desktop\已消失.txt", "工具")
+        cm.assign(os.path.join("X", "Desktop", "已消失.txt"), "工具")
 
         class Item(object):
             def __init__(self, path):
                 self.path = path
                 self.name = os.path.basename(path)
 
-        items = [Item(r"C:\Desktop\别的文件.txt")]
+        items = [Item(os.path.join("X", "Desktop", "别的文件.txt"))]
         self.assertEqual(cm.reconcile_assignments(items), 0)
         self.assertEqual(cm.unresolved_count, 1)
         self.assertTrue(cm.unresolved_note)
