@@ -11,7 +11,7 @@
 [![License](https://img.shields.io/badge/License-MIT-yellow.svg?style=flat-square)](LICENSE)
 [![Platform](https://img.shields.io/badge/Platform-Windows%2010%20%7C%2011-0078D4?style=flat-square&logo=windows&logoColor=white)](#)
 [![Dependencies](https://img.shields.io/badge/Runtime%20Dependencies-0-brightgreen?style=flat-square)](#技术架构与工程亮点)
-[![Version](https://img.shields.io/badge/version-v1.13.2-blue?style=flat-square)](#)
+[![Version](https://img.shields.io/badge/version-v1.13.2-blue?style=flat-square)](https://github.com/shi-jin0825/SJ-desktop-manager/releases/tag/v1.13.2)
 [![Tests](https://img.shields.io/badge/tests-62%20passing-success?style=flat-square)](#测试与持续集成)
 [![CI](https://img.shields.io/github/actions/workflow/status/shi-jin0825/SJ-desktop-manager/tests.yml?style=flat-square&label=CI)](https://github.com/shi-jin0825/SJ-desktop-manager/actions/workflows/tests.yml)
 [![Code Size](https://img.shields.io/badge/code%20size-~10.3k%20LOC-informational?style=flat-square)](#项目结构)

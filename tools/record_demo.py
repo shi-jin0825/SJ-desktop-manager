@@ -98,10 +98,12 @@ def _position_pet_near_main(app):
     if pet is None:
         return
     try:
-        main_right = app.winfo_rootx() + app.winfo_width()
+        # 桌宠放进主窗口右上角内侧，确保 bbox 截屏能完整容纳它
+        main_left = app.winfo_rootx()
         main_top = app.winfo_rooty()
-        pet.x = float(main_right + 40)
-        pet.y = float(main_top + 60)
+        main_w = app.winfo_width()
+        pet.x = float(main_left + main_w - 160)
+        pet.y = float(main_top + 12)
         # 同时更新浮动中心与速度，避免物理引擎下一帧把桌宠拉回原地面
         pet._base_y = pet.y
         pet.vy = 0.0
@@ -113,11 +115,27 @@ def _position_pet_near_main(app):
 
 
 def grab_frame(app, out_dir, name, out_size):
-    """截全屏 + 合成桌宠，缩放后存 PNG。"""
-    from PIL import ImageGrab, Image
-    full = ImageGrab.grab().convert("RGB")
+    """截取墨墨主窗口区域 + 合成桌宠，缩放后存 PNG。
 
-    # 桌宠单独抓取并贴到全屏对应坐标
+    不再用全屏截屏（会把屏幕上其它无关窗口一并录进去），而是只截主窗口
+    的 bounding box，桌宠用 PrintWindow 单独抓取后按相对坐标合成，
+    保证演示画面纯净、可复现。
+    """
+    from PIL import ImageGrab, Image
+
+    # 主窗口的屏幕坐标与尺寸
+    mx, my = app.winfo_rootx(), app.winfo_rooty()
+    mw, mh = app.winfo_width(), app.winfo_height()
+    if mw <= 0 or mh <= 0:
+        return None
+
+    # 只截主窗口自身区域（桌宠已放进窗口内部），pad=0 杜绝露出其它窗口
+    pad = 0
+    bbox = (max(0, mx - pad), max(0, my - pad),
+            mx + mw + pad, my + mh + pad)
+    frame = ImageGrab.grab(bbox=bbox).convert("RGB")
+
+    # 桌宠单独抓取并贴到相对坐标
     pet = getattr(app, "_pet", None)
     if pet is not None:
         try:
@@ -132,16 +150,18 @@ def grab_frame(app, out_dir, name, out_size):
                         r, g, b, a = px[x, y]
                         if r < 12 and g < 12 and b < 12:
                             px[x, y] = (0, 0, 0, 0)
-                full = full.convert("RGBA")
-                full.paste(pet_rgba, (left, top), pet_rgba)
-                full = full.convert("RGB")
+                frame = frame.convert("RGBA")
+                # 桌宠坐标换算到 bbox 内的相对位置
+                rel_x, rel_y = left - bbox[0], top - bbox[1]
+                frame.paste(pet_rgba, (rel_x, rel_y), pet_rgba)
+                frame = frame.convert("RGB")
         except Exception:
             pass
 
     if out_size:
-        full = full.resize(out_size, Image.LANCZOS)
+        frame = frame.resize(out_size, Image.LANCZOS)
     path = os.path.join(out_dir, name)
-    full.save(path)
+    frame.save(path)
     return path
 
 
@@ -151,9 +171,15 @@ def run(out_dir, frames_per_scene, out_size):
     app = App()
     app.update()
     try:
-        app.lift()
+        # 固定一个偏大的录制尺寸，让演示区域更清晰、覆盖屏幕左侧
+        app.geometry("1100x700+0+0")
         app.update()
-        time.sleep(0.3)
+        # 录制期间强制置顶，避免被屏幕上其它窗口遮挡
+        app.attributes("-topmost", True)
+        app.lift()
+        app.focus_force()
+        app.update()
+        time.sleep(0.4)
     except Exception:
         pass
 
@@ -162,6 +188,11 @@ def run(out_dir, frames_per_scene, out_size):
 
     def snap(name):
         nonlocal step
+        try:
+            app.lift()
+            app.attributes("-topmost", True)
+        except Exception:
+            pass
         app.update_idletasks()
         app.update()
         time.sleep(0.12)
@@ -287,9 +318,13 @@ def run(out_dir, frames_per_scene, out_size):
     return frames
 
 
-def make_gif(frames, out_path, fps=10):
+def make_gif(frames, out_path, fps=10, colors=256):
     from PIL import Image
-    imgs = [Image.open(p) for _, p in frames]
+    # 转 P 模式（自适应调色板）再保存，能显著压缩 GIF 体积；
+    # 桌面扁平 UI 用 256 色即可，必要时可降 colors 进一步压体积。
+    imgs = [Image.open(p).convert("P", palette=Image.ADAPTIVE,
+                                  colors=colors) for _, p in frames]
+    imgs = [im for im in imgs if im is not None]
     if not imgs:
         return None
     imgs[0].save(
@@ -302,8 +337,9 @@ def make_gif(frames, out_path, fps=10):
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--frames", type=int, default=6, help="每个场景抓帧数（默认 6）")
-    ap.add_argument("--width", type=int, default=1280, help="输出宽度（默认 1280）")
-    ap.add_argument("--height", type=int, default=800, help="输出高度（默认 800）")
+    ap.add_argument("--width", type=int, default=960, help="输出宽度（默认 960）")
+    ap.add_argument("--height", type=int, default=600, help="输出高度（默认 600）")
+    ap.add_argument("--fps", type=int, default=12, help="GIF 帧率（默认 12）")
     ap.add_argument("--out", default=None, help="输出 GIF 路径")
     ap.add_argument("--list", action="store_true", help="只打印场景清单")
     args = ap.parse_args()
@@ -329,8 +365,8 @@ def main():
         print("未捕获到任何帧")
         return
 
-    gif = make_gif(frames, out)
-    print(f"共 {len(frames)} 帧，输出：{gif}")
+    gif = make_gif(frames, out, fps=args.fps)
+    print(f"共 {len(frames)} 帧 @ {args.fps} fps ≈ {len(frames) / args.fps:.1f} 秒，输出：{gif}")
     print("临时帧目录：", tmp)
 
 
