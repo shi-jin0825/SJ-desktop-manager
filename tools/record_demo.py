@@ -40,6 +40,8 @@ SCENES = (
     ("categories", "分类体系"),
     ("countdowns", "时间管理"),
     ("stats",      "数据统计"),
+    ("settings",   "设置页"),
+    ("ai_chat",    "AI 助手对话"),
     ("pet",        "呼出桌宠"),
     ("pomodoro",   "番茄钟"),
 )
@@ -114,12 +116,15 @@ def _position_pet_near_main(app):
         pass
 
 
-def grab_frame(app, out_dir, name, out_size):
+def grab_frame(app, out_dir, name, out_size, bbox_override=None):
     """截取墨墨主窗口区域 + 合成桌宠，缩放后存 PNG。
 
     不再用全屏截屏（会把屏幕上其它无关窗口一并录进去），而是只截主窗口
     的 bounding box，桌宠用 PrintWindow 单独抓取后按相对坐标合成，
     保证演示画面纯净、可复现。
+
+    bbox_override：可选，传一个 (x1, y1, x2, y2) 屏幕坐标，用于截取
+    非主窗口的区域（如 AI 对话弹窗），使其完整入镜。
     """
     from PIL import ImageGrab, Image
 
@@ -129,10 +134,13 @@ def grab_frame(app, out_dir, name, out_size):
     if mw <= 0 or mh <= 0:
         return None
 
-    # 只截主窗口自身区域（桌宠已放进窗口内部），pad=0 杜绝露出其它窗口
-    pad = 0
-    bbox = (max(0, mx - pad), max(0, my - pad),
-            mx + mw + pad, my + mh + pad)
+    if bbox_override is not None:
+        bbox = bbox_override
+    else:
+        # 只截主窗口自身区域（桌宠已放进窗口内部），pad=0 杜绝露出其它窗口
+        pad = 0
+        bbox = (max(0, mx - pad), max(0, my - pad),
+                mx + mw + pad, my + mh + pad)
     frame = ImageGrab.grab(bbox=bbox).convert("RGB")
 
     # 桌宠单独抓取并贴到相对坐标
@@ -186,17 +194,18 @@ def run(out_dir, frames_per_scene, out_size):
     frames = []
     step = 0
 
-    def snap(name):
+    def snap(name, top=None, bbox=None):
         nonlocal step
         try:
-            app.lift()
-            app.attributes("-topmost", True)
+            (top or app).lift()
+            (top or app).attributes("-topmost", True)
         except Exception:
             pass
         app.update_idletasks()
         app.update()
         time.sleep(0.12)
-        p = grab_frame(app, out_dir, f"{step:03d}_{name}.png", out_size)
+        p = grab_frame(app, out_dir, f"{step:03d}_{name}.png", out_size,
+                       bbox_override=bbox)
         step += 1
         frames.append((name, p))
         return p
@@ -292,7 +301,67 @@ def run(out_dir, frames_per_scene, out_size):
             _position_pet_near_main(app)
             snap("stats")
 
-        # 6. 番茄钟（桌宠伴学状态）
+        # 6. 设置页（顶部外观区；AI 助手入口由独立的对话窗口场景展示）
+        app._show_page("settings", force=True)
+        reset_search()
+        for _ in range(frames_per_scene):
+            _position_pet_near_main(app)
+            snap("settings")
+
+        # 7. AI 助手对话窗口（预置一轮演示问答，展示气泡 / 输入框 / 发送按钮）
+        _ai_dlg = None
+        try:
+            from gui.pages import AIChatDialog
+            _ai_dlg = AIChatDialog(app, app)
+            _ai_dlg.lift()
+            _ai_dlg.attributes("-topmost", True)
+            _ai_dlg.update_idletasks()
+            _ai_dlg.update()
+            time.sleep(0.3)
+            # 预置一条用户提问 + 一条墨墨回复，展示「左灰右蓝」气泡
+            _ai_dlg._bubble("帮我安排一下今天的待办事项", "me")
+            _ai_dlg._bubble("好的～你可以到「时间管理」里新建计划，"
+                            "记得顺手定个番茄钟，我们一起专注！", "momo")
+            _ai_dlg.update()
+            # 用 PrintWindow 直接抓 AI 窗口内容（不受屏幕遮挡/坐标影响）
+            for _ in range(frames_per_scene):
+                try:
+                    _ai_dlg.lift()
+                    _ai_dlg.attributes("-topmost", True)
+                except Exception:
+                    pass
+                _ai_dlg.update_idletasks()
+                _ai_dlg.update()
+                time.sleep(0.12)
+                _img, _l, _t = capture_window(_ai_dlg.winfo_id())
+                if _img is None:
+                    continue
+                from PIL import Image
+                if out_size:
+                    _img = _img.resize(out_size, Image.LANCZOS).convert("RGB")
+                else:
+                    _img = _img.convert("RGB")
+                _p = os.path.join(out_dir, f"{step:03d}_ai_chat.png")
+                _img.save(_p)
+                frames.append(("ai_chat", _p))
+                step += 1
+            _ai_dlg.destroy()
+        except Exception:
+            pass
+
+        # 8. 呼出桌宠（收起再重新呼出，突出「一键召唤」）
+        if app.pet_active():
+            app._toggle_pet()
+            app.update()
+            time.sleep(0.3)
+        app._toggle_pet()
+        app.update()
+        time.sleep(0.4)
+        for _ in range(frames_per_scene):
+            _position_pet_near_main(app)
+            snap("pet")
+
+        # 9. 番茄钟（桌宠伴学状态）
         app._show_page("countdowns", force=True)
         app.start_pomodoro(1, 1)
         app.update()
