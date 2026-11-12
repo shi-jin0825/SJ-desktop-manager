@@ -382,7 +382,11 @@ class App(tk.Tk):
         texts = tk.Frame(box, bg=c["sidebar_bg"])
         texts.pack(side="left", fill="x", expand=True)
         user = os.environ.get("USERNAME") or os.environ.get("USER") or "本机用户"
-        done = len(self.config_mgr.data.get("assignments", {}))
+        # 已归类数走 category_counts（与首页磁贴/分类弹窗一致），初始先按
+        # 配置字典条目数兜底，首页扫描完成后由 refresh_sidebar_count 回写
+        # 真正能对应到桌面项目的归类数，避免「侧栏 9 项 vs 首页 0 项」打架。
+        done = self._count_assigned_fallback()
+        self._user_done_label = None
         for text, color_key, size, weight in (
                 (APP_TITLE, "text", FS["sm"], "bold"),
                 (f"{APP_VERSION} · {user}", "sidebar_muted", FS["xs"], "normal"),
@@ -391,6 +395,26 @@ class App(tk.Tk):
                            font=font(size, weight), anchor="w")
             lab.pack(fill="x", expand=True)
             fit_label(lab, text, pad=TEXT_PAD)
+            if self._user_done_label is None and text.startswith("已归类"):
+                self._user_done_label = lab
+
+    def _count_assigned_fallback(self):
+        """侧栏初始的已归类数兜底：先按配置字典条目数（扫描前用）。"""
+        return len(self.config_mgr.data.get("assignments", {}))
+
+    def refresh_sidebar_count(self, items):
+        """首页扫描完成后回写侧栏「已归类 N 项」，与首页磁贴一致。
+
+        分类计数唯一事实来源是 ConfigManager.category_counts（基于扫描
+        结果的 get_category 解析），侧栏不能再用 len(assignments) 原值——
+        否则路径对不上时侧栏照旧显示、首页却归 0，自相矛盾。
+        """
+        if getattr(self, "_user_done_label", None) is None:
+            return
+        done = sum(self.config_mgr.category_counts(items).values())
+        text = f"已归类 {done} 项"
+        self._user_done_label.config(text=text)
+        fit_label(self._user_done_label, text, pad=TEXT_PAD)
 
     # ---------------- 全局搜索 ----------------
     def _build_search(self):

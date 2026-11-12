@@ -92,6 +92,8 @@ class ConfigManager:
         self.status_note = ""
         self.save_error = ""            # 最近一次写盘失败的错误文本（"" = 正常）
         self.error_reporter = None      # App 挂的「写盘失败」通知回调
+        self.unresolved_count = 0       # 归类 key 无法对应到当前桌面项的条数
+        self.unresolved_note = ""       # 上一条的人类可读说明（供 UI 提示）
         self.data = self._load()
         self._migrate()
 
@@ -293,6 +295,27 @@ class ConfigManager:
             self.save()
         return got or ""
 
+    def category_counts(self, items) -> dict:
+        """分类计数的唯一事实来源：{分类名: 项目数}。
+
+        首页磁贴、分类弹窗、侧栏「已归类 N 项」、分类页分布条，全部
+        从这里取数，杜绝「同一份数据两处给出互相否定的答案」——此前
+        首页靠 get_category 从扫描结果解析（路径对不上就全归 0），
+        分类弹窗却直接数 assignments 原值（照旧显示），两者打架。
+
+        这里统一走 get_category：对每个扫描项按路径解析分类（顺手把
+        旧版文件名 key 迁移成路径 key），只统计「能对应当前扫描结果」
+        的归类，与首页 / 分类页看到的磁贴数量严格一致。
+        """
+        counts = {}
+        for it in items:
+            path = getattr(it, "path", it)
+            name = getattr(it, "name", None) or os.path.basename(path)
+            cat = self.get_category(path, name)
+            if cat:
+                counts[cat] = counts.get(cat, 0) + 1
+        return counts
+
     def assign_batch(self, paths, category: str) -> int:
         """批量归类（一次 save），返回成功条数。"""
         if category not in self.categories:
@@ -350,6 +373,61 @@ class ConfigManager:
         if dead:
             self.save()
         return len(dead)
+
+    def reconcile_assignments(self, items) -> int:
+        """扫描后调用：把「路径对不上当前扫描结果」的归类尽量救回来。
+
+        打包 exe 的 _config_dir 是 sys.executable 目录、桌面被 OneDrive
+        重定向、路径大小写差异，都会让 assignments 里的 key 跟这次扫描
+        出来的 item_key 对不上——表现就是首页磁贴全归 0（未归类），
+        而分类弹窗数原值照旧显示，两边自相矛盾。
+
+        策略（拒绝静默失效）：
+          1. 先把还能按路径精确命中的 key 认领走；
+          2. 剩下的 key 按 basename 尝试重关联（文件被移动 / 重命名后，
+            路径变了但文件名还在，就能找回来）；
+          3. 仍对不上的，计入 self.unresolved_count 并留一句说明，UI
+             据此显式提示「N 项待重新关联」，而不是静默显示 0。
+        返回成功重关联的条数。
+        """
+        # 精确命中集合
+        alive_by_key = {}
+        for it in items:
+            path = getattr(it, "path", it)
+            alive_by_key[item_key(path)] = it
+        # 按 basename 建立索引（用于模糊重关联；同名取第一个）
+        alive_by_name = {}
+        for it in items:
+            path = getattr(it, "path", it)
+            name = getattr(it, "name", None) or os.path.basename(path)
+            alive_by_name.setdefault(os.path.normcase(name), it)
+
+        unresolved = 0
+        relinked = 0
+        for k in list(self.data["assignments"].keys()):
+            if k in alive_by_key:
+                continue                     # 已精确命中，无需处理
+            name = os.path.basename(k)
+            target = alive_by_name.get(os.path.normcase(name))
+            if target is not None:
+                # 按 basename 重关联：新 key = 目标项的真实路径 key
+                new_key = item_key(getattr(target, "path", target))
+                val = self.data["assignments"].pop(k)
+                self.data["assignments"].setdefault(new_key, val)
+                relinked += 1
+            else:
+                # 连 basename 都对不上：真正的「待重新关联」死条目
+                unresolved += 1
+
+        self.unresolved_count = unresolved
+        if unresolved:
+            self.unresolved_note = (f"有 {unresolved} 项归类无法对应到当前桌面"
+                                    "项目，已保留待重新关联")
+        else:
+            self.unresolved_note = ""
+        if relinked:
+            self.save()
+        return relinked
 
     # ---- 专属倒计时（倒数日）----
     @property

@@ -663,9 +663,13 @@ class DesktopPage(BasePage):
         self._photos = []
         if rescan or not self.items:
             self.items = scan_desktop()
-        # 旧配置（按文件名归类）就地升级成按路径；顺手清掉改名/移动留下的死条目
+        # 旧配置（按文件名归类）就地升级成按路径；把路径对不上的归类按
+        # basename 重关联，实在对不上的计入待重新关联（拒绝静默失效）。
+        # 不再调用 prune_assignments 删死条目——reconcile 会把对不上的
+        # 归类保留并计数提示，而不是静默删除（OneDrive 未同步 / 外接盘
+        # 没插时文件暂时不可见，此时删归类 = 误删用户多年积累）。
         self.cfg.migrate_assignments(self.items)
-        self.cfg.prune_assignments([i.path for i in self.items])
+        self.cfg.reconcile_assignments(self.items)
         for item in self.items:
             item.category = self.cfg.get_category(item.path, item.name)
 
@@ -679,9 +683,11 @@ class DesktopPage(BasePage):
                      or query in (i.category or "").lower()]
         # 记下这一轮真正画出来的项：Shift 连选的区间以它为准
         self._visible_items = items
+        # 分类计数的唯一事实来源（对当前可见 items 统计，搜索时随之收窄）
+        counts = self.cfg.category_counts(items)
         categories = [cat for cat in self.cfg.categories
                       if not query or query in cat.lower()
-                      or any(i.category == cat for i in items)]
+                      or counts.get(cat, 0) > 0]
 
         w = self.canvas.winfo_width()
         if w > 1:
@@ -707,7 +713,7 @@ class DesktopPage(BasePage):
 
         idx = 0
         for cat in categories:
-            count = sum(1 for i in items if i.category == cat)
+            count = counts.get(cat, 0)
             row, col = self._cell(idx, cols, total)
             self._make_folder_tile(row, col, cat, count)
             idx += 1
@@ -724,7 +730,14 @@ class DesktopPage(BasePage):
             self.app.update_topbar(f"搜索「{self.app.query}」· {total} 个结果"
                                    f"（共 {len(self.items)} 项）")
         else:
-            self.app.update_topbar(self.subtitle + f" · 共 {len(self.items)} 项")
+            unresolved = getattr(self.cfg, "unresolved_count", 0)
+            suffix = (f" · ⚠ {unresolved} 项待重新关联" if unresolved else "")
+            self.app.update_topbar(self.subtitle + f" · 共 {len(self.items)} 项"
+                                   + suffix)
+            # 回写侧栏「已归类 N 项」，与首页磁贴、分类弹窗保持一致
+            refresh_sidebar = getattr(self.app, "refresh_sidebar_count", None)
+            if refresh_sidebar is not None:
+                refresh_sidebar(self.items)
 
     def open_first(self):
         """回车：打开搜索结果里的第一个（分类窗口 / 直接启动）。"""
@@ -1016,7 +1029,9 @@ class DesktopPage(BasePage):
         scroll.config(command=lst.yview)
 
         def count_of(cat):
-            return sum(1 for v in self.cfg.data["assignments"].values() if v == cat)
+            # 与首页磁贴、分类页共用 category_counts，避免「分类弹窗数原值、
+            # 首页按扫描解析」两边打架
+            return self.cfg.category_counts(self.items).get(cat, 0)
 
         def reload(keep=None):
             lst.delete(0, "end")
@@ -1191,9 +1206,13 @@ class StatsPage(BasePage):
         for w in self.body.winfo_children():
             w.destroy()
         items = scan_desktop()
+        self.cfg.migrate_assignments(items)
+        self.cfg.reconcile_assignments(items)
         for i in items:
             i.category = self.cfg.get_category(i.path, i.name)
-        done = sum(1 for i in items if i.category)
+        # 分类计数的唯一事实来源
+        counts = self.cfg.category_counts(items)
+        done = sum(counts.values())
         total = len(items)
 
         # 概览数字卡片
@@ -1216,7 +1235,7 @@ class StatsPage(BasePage):
         self._section("分类分布")
         if total:
             for cat in self.cfg.categories:
-                n = sum(1 for i in items if i.category == cat)
+                n = counts.get(cat, 0)
                 self._row(cat, n, total)
             n = total - done
             if n:
