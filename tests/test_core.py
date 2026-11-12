@@ -148,6 +148,8 @@ class ConfigTest(unittest.TestCase):
         self.assertEqual(cm.load_status, "reset")
         self.assertEqual(cm.categories, ["工具", "办公", "娱乐"])
 
+    @unittest.skipUnless(os.name == "nt",
+                         "路径大小写与斜杠归一属 Windows 语义（normcase）")
     def test_assignment_key_is_path(self):
         cm = ConfigManager(self.path)
         cm.assign(r"C:\Users\me\Desktop\a.txt", "工具")
@@ -197,6 +199,8 @@ class ConfigTest(unittest.TestCase):
         cm.remove_category("工具")
         self.assertEqual(cm.get_category(r"C:\a.txt"), "")
 
+    @unittest.skipUnless(os.name == "nt",
+                         "路径大小写与斜杠归一属 Windows 语义（normcase）")
     def test_item_key_normalized(self):
         self.assertEqual(item_key(r"C:\A\b.TXT"), item_key("c:/a/B.txt"))
 
@@ -241,6 +245,8 @@ class UndoStackTest(unittest.TestCase):
 class IconsCacheKeyTest(unittest.TestCase):
     """图标缓存 key：斜杠写法不同不能变成两条缓存。"""
 
+    @unittest.skipUnless(os.name == "nt",
+                         "路径大小写与斜杠归一属 Windows 语义（normcase）")
     def test_slash_variants_share_one_key(self):
         from core.icons import cache_key
         self.assertEqual(cache_key(r"C:\Users\me\a.lnk", 48),
@@ -253,6 +259,8 @@ class IconsCacheKeyTest(unittest.TestCase):
         self.assertNotEqual(cache_key(r"C:\a.lnk", 48),
                             cache_key(r"C:\a.lnk", 32))
 
+    @unittest.skipUnless(os.name == "nt",
+                         "路径大小写与斜杠归一属 Windows 语义（normcase）")
     def test_matches_config_item_key(self):
         """缓存 key 与 config 的归类 key 用同一套规范化，避免两边不一致。"""
         from core.icons import cache_key
