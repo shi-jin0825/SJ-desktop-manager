@@ -102,6 +102,10 @@ def _position_pet_near_main(app):
         main_top = app.winfo_rooty()
         pet.x = float(main_right + 40)
         pet.y = float(main_top + 60)
+        # 同时更新浮动中心与速度，避免物理引擎下一帧把桌宠拉回原地面
+        pet._base_y = pet.y
+        pet.vy = 0.0
+        pet.vx = 0.0
         pet.geometry(f"+{int(pet.x)}+{int(pet.y)}")
         app.update_idletasks()
     except Exception:
@@ -173,65 +177,108 @@ def run(out_dir, frames_per_scene, out_size):
         except Exception:
             pass
 
+    # 临时归类：给几个真实桌面项归到分类，让分类页/统计页有层次。
+    # 录完在 finally 里恢复原状，不污染用户配置。
+    demo_assignments = []
+
+    def demo_assign():
+        """扫描桌面项，挑前几项临时归到「工具/办公/娱乐」，返回可恢复清单。"""
+        try:
+            from core.scanner import scan_desktop
+            items = scan_desktop()
+            # 按分类轮转分配：第 i 个未归类项归到第 i%3 个分类，避免重复
+            cats = ["工具", "办公", "娱乐"]
+            per_cat = 3
+            counts = {c: 0 for c in cats}
+            for it in items:
+                if app.config_mgr.get_category(it.path, it.name):
+                    continue   # 已有归类，跳过
+                cat = cats[len(demo_assignments) % len(cats)]
+                if counts[cat] >= per_cat:
+                    continue
+                app.config_mgr.assign(it.path, cat)
+                demo_assignments.append((it.path, cat))
+                counts[cat] += 1
+                if all(v >= per_cat for v in counts.values()):
+                    break
+            return len(demo_assignments)
+        except Exception:
+            return 0
+
+    def demo_unassign():
+        for p, cat in demo_assignments:
+            try:
+                app.config_mgr.unassign(p)
+            except Exception:
+                pass
+
     try:
-        # 1. 首页磁贴
+        # 0. 提前呼出桌宠，全程陪伴
+        if not app.pet_active():
+            app._toggle_pet()
+            app.update()
+            time.sleep(0.4)
+
+        # 1. 首页磁贴（桌宠已在旁陪伴）
         app._show_page("home", force=True)
         reset_search()
         for _ in range(frames_per_scene):
+            _position_pet_near_main(app)
             snap("home")
 
         # 2. 全局搜索
         app._show_page("home", force=True)
         app.search_var.set("")
         app.update()
+        _position_pet_near_main(app)
         snap("search_0")
         app.search_var.set("墨")
         app.update()
         for _ in range(frames_per_scene):
+            _position_pet_near_main(app)
             snap("search")
         reset_search()
 
-        # 3. 分类体系
+        # 3. 分类体系（先临时归类，让分类页有内容）
+        demo_assign()
         app._show_page("categories", force=True)
         reset_search()
         for _ in range(frames_per_scene):
+            _position_pet_near_main(app)
             snap("categories")
 
         # 4. 时间管理
         app._show_page("countdowns", force=True)
         reset_search()
         for _ in range(frames_per_scene):
+            _position_pet_near_main(app)
             snap("countdowns")
 
         # 5. 数据统计
         app._show_page("stats", force=True)
         reset_search()
         for _ in range(frames_per_scene):
+            _position_pet_near_main(app)
             snap("stats")
 
-        # 6. 呼出桌宠
-        if not app.pet_active():
-            app._toggle_pet()
-            app.update()
-            time.sleep(0.4)
-        _position_pet_near_main(app)
-        for _ in range(frames_per_scene):
-            snap("pet")
-
-        # 7. 番茄钟（桌宠伴学）
+        # 6. 番茄钟（桌宠伴学状态）
         app._show_page("countdowns", force=True)
         app.start_pomodoro(1, 1)
         app.update()
         time.sleep(0.4)
-        _position_pet_near_main(app)
         for _ in range(frames_per_scene):
+            _position_pet_near_main(app)
             snap("pomodoro")
         app.stop_pomodoro()
 
-        if app.pet_active():
-            app._toggle_pet()
-
     finally:
+        # 恢复临时归类，收起桌宠
+        demo_unassign()
+        try:
+            if app.pet_active():
+                app._toggle_pet()
+        except Exception:
+            pass
         try:
             app.destroy()
         except Exception:
