@@ -1,255 +1,426 @@
-# 墨墨桌面管理助手（SJ-desktop-manager）
+<a id="zh" name="zh"></a>
 
-一款用 Python（tkinter）编写的 Windows 桌面管理器，把桌面变成"手机桌面"：
-扫描桌面上的文件、文件夹和快捷方式，按你自定义的分类归入"文件夹"，清晰一目了然。
+<div align="center">
 
-新版界面采用**左侧边栏导航 + 右侧主内容区**的布局。
+# 墨墨桌面管理助手 · MoMo Desktop Manager
 
-| 浅色模式 · 首页 | 深色模式 · 首页 |
-| --- | --- |
-| ![浅色首页](assets/screenshot.png) | ![深色首页](assets/screenshot-dark.png) |
+**把杂乱的 Windows 桌面，变成一块干净、可归类、有温度的磁贴屏。**
+*Turn a cluttered Windows desktop into a clean, categorized, slightly alive tile board.*
 
-![数据统计](assets/screenshot-stats.png)
+[![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?style=flat-square&logo=python&logoColor=white)](https://www.python.org/downloads/)
+[![License](https://img.shields.io/badge/License-MIT-yellow.svg?style=flat-square)](LICENSE)
+[![Platform](https://img.shields.io/badge/Platform-Windows%2010%20%7C%2011-0078D4?style=flat-square&logo=windows&logoColor=white)](#)
+[![Dependencies](https://img.shields.io/badge/Runtime%20Dependencies-0-brightgreen?style=flat-square)](#技术架构与工程亮点)
+[![Version](https://img.shields.io/badge/version-v1.13.2-blue?style=flat-square)](#)
+[![Tests](https://img.shields.io/badge/tests-62%20passing-success?style=flat-square)](#测试与持续集成)
+[![CI](https://img.shields.io/github/actions/workflow/status/shi-jin0825/SJ-desktop-manager/tests.yml?style=flat-square&label=CI)](https://github.com/shi-jin0825/SJ-desktop-manager/actions/workflows/tests.yml)
+[![Code Size](https://img.shields.io/badge/code%20size-~10.3k%20LOC-informational?style=flat-square)](#项目结构)
 
-![专属倒计时](assets/screenshot-countdown.png)
+[中文](#zh) · [English](#english)
 
-## 界面结构
+</div>
 
-**左侧边栏**
+---
 
-- 顶部用户信息：墨墨头像 + 当前 Windows 用户名 + 已归类数量
-- 全局搜索框：输入即过滤桌面项与分类，回车打开第一项
-- 导航菜单：首页 · 分类管理 · 数据统计 · 时间管理 · 设置
-  （左侧统一线性图标，当前页高亮）
-- 左下角功能键：折叠 / 展开侧边栏（状态自动记住）、退出
+## 目录
 
-**右侧主内容区**：点击左侧菜单切换对应的页面
+- [项目简介](#项目简介)
+- [功能演示](#功能演示)
+- [核心功能](#核心功能)
+- [技术架构与工程亮点](#技术架构与工程亮点)
+- [快速开始](#快速开始)
+- [项目结构](#项目结构)
+- [测试与持续集成](#测试与持续集成)
+- [常见问题](#常见问题)
+- [Roadmap](#roadmap)
+- [License](#license)
+- [English](#english)
 
-| 页面 | 内容 |
-| --- | --- |
-| 🏠 首页 | 手机桌面式网格：真实图标磁贴、分类文件夹 3×3 预览、右键归类、Ctrl/Shift 多选批量移入 |
-| 🗂 分类管理 | 分类卡片：图标预览、内容概览、打开 / 重命名 / 删除、新建分类 |
-| 📊 数据统计 | 概览数字卡片 + 分类分布占比条 + 类型分布（快捷方式 / 文件夹 / 文件） |
-| 🗓 时间管理 | **日程计划**：自定义计划内容（定日期或不限日期），点勾选框完成 / 重做，逾期自动置顶提醒；**倒数日**：置顶大卡 + 每年循环；内置番茄钟 |
+---
 
-| ⚙ 设置 | 浅色 / 深色主题、桌面宠物召唤、侧边栏折叠、版本信息 |
+## 项目简介
 
-## 功能
+Windows 桌面的整理方式，二十年来几乎没有变化：图标只能靠手动拖动、按名称排序，或者干脆堆在屏幕边缘任由它变成"文件垃圾场"。市面上的美化工具大多以替换桌面为目标，一旦卸载便留下一地残留；而真正能"归类但不移动文件"的方案又寥寥无几。
 
-- 🔄 自动扫描桌面（含公共桌面）上的文件 / 文件夹 / `.lnk` / `.url` 快捷方式
-- 🧭 **左侧边栏导航**：用户信息 + 五个页面切换 + 底部折叠 / 退出，可一键折叠成纯图标；
-  图标为**自制统一线性图标**（`gui/navicons.py`，24×24 网格、统一线宽圆头，
-  纯 Canvas 绘制、颜色跟随主题，浅色 / 深色自动适配）
-- 🔍 **全局搜索**：侧边栏顶部搜索框，输入即过滤首页的桌面项与分类（不重新扫描桌面，
-  边打字边出结果），回车直接打开第一个匹配项，Esc 清空
-- ⌨️ **全局热键**：设置页自定义（如 Ctrl+Alt+M），**一键呼出 / 隐藏主窗口**，
-  窗口隐藏时也有效；默认组合被其它程序占用时自动降级到备用组合并提示，
-  注册用 `RegisterHotKey` + 只按 `WM_HOTKEY` 过滤取消息（不影响 Tk 自身事件）
-- 📐 **自适应网格**：每行磁贴数随窗口宽度自动增减（最小 4、最大 16），
-  放大窗口后内容始终居中，排满一行后后续行顶到最左侧
-- 🖼 **显示每个项目的系统真实图标**（而非统一的文件 emoji）——通过 Windows Shell 的
-  `IShellItemImageFactory` 接口提取 48×48 带 alpha 通道的真彩图标，能正确解析
-  Steam / UWP 类快捷方式的目标程序图标；提取失败时回退 `SHGetFileInfoW`，再回退 emoji
-- 📁 **手机文件夹式分类磁贴**：分类磁贴内部按 3×3 预览该分类前 9 个项目的真实小图标，
-  不打开文件夹就能看清里面放了什么；空分类显示提示，悬停高亮，圆角面板样式
-- 🖱 双击即打开对应文件或程序；右键可将任意项目移入 / 移出分类
-- 💾 分类与分配关系保存在 `config.json`，不会移动或改动桌面上的真实文件
-- ⌨️ F5 刷新
-- ⚙ **设置**：「⚙ 设置」页可切换**浅色 / 深色模式**，全界面（主窗口、侧边栏、
-  磁贴、弹窗、右键菜单、统计页）统一换色，选择持久化到 `config.json`
-- 🗂 **分类管理页**：以卡片形式管理全部分类（新建 / 重命名 / 删除 / 打开），
-  首页工具栏与磁贴右键也能完成同样的操作
-- 📊 **数据统计页**：桌面项目总数、已归类 / 未归类、分类数，以及分类与类型的分布条
-- 🖱 右侧滚动条可点击轨道跳页、按住滑块拖动；内容不满一屏时自动置为不可滚状态
-- 📈 **系统状态联动（桌宠）**：CPU 占用率（`GetSystemTimes` 两次采样求差）、
-  物理内存（`GlobalMemoryStatusEx`）、实时网速（`GetIfTable2` 网卡计数差分）
-  的采集**从系统监控页转移到桌面宠物**：召唤墨墨后每秒后台采样一次，
-  CPU > 80% 自动切冒汗吐舌脸 + 气泡吐槽、内存 > 90% 切疲惫脸、
-  网速快则切换奔跑动画——不设监控页面，状态变化由桌宠直接「说」出来
-- 🗓 **时间管理**：一个页面管两件事——
-  **日程计划**：自定义计划内容，可以定日期（滚轮选年月日）也可以不限日期
-  当待办，卡片点勾选框即完成（划线置灰、自动记完成日期），排序规则：
-  逾期 → 今天 → 未来 → 无日期 → 已完成；**倒数日**：自定义重要的日子
-  （考试 / 生日 / 假期…），置顶大卡自动提醒最近的一个，支持「每年循环」、
-  完成度进度条、编辑 / 删除；数据都保存在 `config.json`，
-  页面每分钟自动刷新，跨零点也会正确更新
-- 🐙 **桌面宠物 2.0（物理引擎 + 深度联动）**：召唤墨墨到桌面独立悬浮，
-  - **物理引擎**：抓住它随意甩，松手会把速度继承下来——重力下落、撞墙反弹、
-    落地 Q 弹压缩动画（冲击越大压得越扁）
-  - **摸头互动**：单击开心眯眼笑，3 秒内连点 5 次会害羞（腮红）
-  - **系统状态联动**（可开关）：CPU ≥ 80% 好热冒汗吐舌、内存负载 ≥ 85% 累到
-    半闭眼、下载 ≥ 400 KB/s 脚底抹油横向飞奔——状态变化时头顶冒气泡说明
-  - **番茄钟伴学**：倒计时页 / 设置页 / 桌宠右键菜单均可开始；时长完全自定义
-    （滚轮选专注分钟数 + 休息分钟数，可记住为默认），墨墨捧着书陪你专注，
-    头顶显示倒计时；结束后（或被手动取消）**立刻收起倒计时**，只留一句庆祝
-    提示，之后恢复正常状态
-  - 头顶气泡、右键菜单（番茄钟 / 物理开关 / 联动开关 / 穿透 / 浮动速度），
-    7 种表情立绘全部由 `tools/momo_states.py` 从原图程序化生成，零第三方依赖
-- 🧹 自动过滤 `desktop.ini` 等隐藏 / 系统文件，不会混进网格
+**墨墨桌面管理助手**换了一个思路：它不接管你的桌面，而是把桌面上的文件、文件夹与快捷方式**映射**成一块类似手机桌面的磁贴屏——真实图标、自适应网格、可分类收纳、可全局搜索，底层文件一个都不搬动。
 
-整个程序**只依赖 Python 标准库**（tkinter + ctypes 调用 Win32/COM），
-包括图标提取和 PNG 编码都是纯标准库实现，无任何第三方依赖。
+更具辨识度的是，它以 **零第三方运行时依赖** 为技术底线：图形界面用 `tkinter`，系统图标提取、CPU / 内存 / 网速采集、全局热键、快捷方式创建全部通过 `ctypes` 直调 Win32 与 COM 接口实现，连 PNG 编码都是用 `zlib + struct` 手写的。项目迭代至 **v1.13.2，累计 31 个版本，约 10,300 行 Python**，并配有 **62 项自动化测试** 与跨平台 CI。
 
-## 运行
+> 一句话概括：**一个把"少装一个库"当成架构约束，而不是当成偷懒理由的桌面工具。**
 
-双击 `run.bat`（**自动探测**本机的 Python，用 `pythonw.exe` 启动，不会弹出
-命令行黑框），或：
+---
+
+## 功能演示
+
+> **📌 动图占位 · 请在此插入运行录屏**
+>
+> 1. 录制 10–15 秒的核心流程：**磁贴归类 → 全局搜索 → 呼出桌宠 → 启动番茄钟**；
+> 2. 导出为 `assets/demo.gif`（建议 1280×800、15 fps、体积 ≤ 8 MB）；
+> 3. 删除下面这一行的注释符号即可显示：
+>
+> ```markdown
+> <!-- ![MoMo Demo](assets/demo.gif) -->
+> ```
+>
+> 亦可使用 GitHub 原生视频：将录屏拖入 Issue 编辑框取得 `https://user-images.githubusercontent.com/...` 链接后，替换为 `<video src="..." controls></video>`。
+
+<!-- 动图占位：录制完成后删除本注释与下一行注释，GIF 将显示在 README 顶部 -->
+<!-- ![MoMo Demo](assets/demo.gif) -->
+
+### 界面截图
+
+| 磁贴桌面（浅色） | 磁贴桌面（深色） |
+| :---: | :---: |
+| ![首页](assets/screenshot.png) | ![深色主题](assets/screenshot-dark.png) |
+| **时间管理：计划 / 倒计时 / 番茄钟** | **数据统计** |
+| ![时间管理](assets/screenshot-countdown.png) | ![数据统计](assets/screenshot-stats.png) |
+
+---
+
+## 核心功能
+
+| 模块 | 能力 |
+| :--- | :--- |
+| **桌面管理** | 自动扫描桌面（含公共桌面）的文件、文件夹、`.lnk` 与 `.url`，过滤隐藏 / 系统项；磁贴每行 4–16 列随窗口宽度自适应；文件夹磁贴内部以 3×3 预览前 9 项图标 |
+| **分类体系** | 手机文件夹式分类，右键移入 / 移出；分类只是"映射关系"，**不移动、不重命名、不删除**任何真实文件，卸载即还原 |
+| **全局交互** | 侧边栏实时搜索（输入即过滤、回车打开首项）；可自定义全局热键（默认 `Ctrl+Alt+M`）在窗口隐藏时一键呼出；浅色 / 深色主题全界面统一换色并持久化 |
+| **桌面宠物「墨墨」** | 独立悬浮窗口，具备抓取甩出、重力下落、撞墙反弹、落地 Q 弹压缩的物理表现；单击摸头开心、连点害羞；CPU 高时冒汗、内存不足时疲惫、网速快时奔跑，并以头顶气泡提示 |
+| **时间管理** | 日程计划（可选日期 / 不限日期，按逾期 → 今天 → 未来 → 无日期排序，支持拖拽）、倒数日（每年循环 + 完成度进度条）、番茄钟（重启恢复、离线补签、秒级暂停、多轮休息阶段、声音 + 任务栏闪烁 + 隐藏自动唤起） |
+| **AI 助手** | 设置页内嵌对话窗口，接入智谱 `glm-4-flash`；子线程请求、主线程回调；断网、无 Key、限流时全部友好兜底，**不崩溃** |
+| **数据统计与管理** | 桌面项目总数、归类覆盖率、类型分布，以及专注轮数、累计时长、计划完成率；配置支持导出 / 导入（校验 + 自动备份）/ 清理 |
+
+---
+
+## 技术架构与工程亮点
+
+### 架构总览
+
+```mermaid
+flowchart TB
+    subgraph UI["表现层 · gui/ (tkinter)"]
+        A1["app.py · 主窗口与页面路由"]
+        A2["pages.py · 首页 / 分类 / 统计 / 时间 / 设置"]
+        A3["widgets.py · Canvas 自绘控件"]
+        A4["pet.py · 桌宠物理引擎"]
+        A5["tokens.py · theme.py · 设计令牌"]
+    end
+
+    subgraph CORE["领域层 · core/ (纯逻辑，不依赖 tkinter)"]
+        B1["scanner · 桌面扫描"]
+        B2["config · 原子写 / 备份 / 迁移"]
+        B3["icons · 图标提取"]
+        B4["sysinfo · 系统状态采集"]
+        B5["ai_client · 智谱 GLM"]
+        B6["hotkey · undo · countdown"]
+    end
+
+    subgraph SYS["系统层 · Windows"]
+        C1["Win32 API (ctypes)"]
+        C2["COM: IShellItemImageFactory / IShellLinkW"]
+        C3["Shell 与文件系统"]
+    end
+
+    D[("config.json + .bak + .corrupt")]
+
+    A1 --> A2 --> B2
+    A3 --> B2
+    A4 --> B4
+    A2 --> B1
+    A2 --> B3
+    A2 --> B5
+    B1 --> C3
+    B3 --> C2
+    B4 --> C1
+    B6 --> C1
+    B2 --> D
+```
+
+分层原则：**`core/` 不允许 `import tkinter`**。领域逻辑因此可以在无显示环境下被单元测试直接覆盖，GUI 只负责渲染与事件绑定。
+
+### 六个值得关注的工程决策
+
+**1. 零第三方运行时依赖：把约束当成设计语言**
+
+`requirements.txt` 全文只有一行注释。不是"没来得及引入库"，而是主动的取舍：
+
+- **收益**：`git clone` 后 `python main.py` 即可运行；PyInstaller 产物无需捆绑 NumPy / Pillow 等大型轮子，单文件 exe 体积可控；无供应链风险与版本冲突；在离线机器、受限企业环境中可直接部署。
+- **代价**：图标解码、PNG 编码、物理动画等能力必须自行实现，开发成本显著高于"装个库"。
+- **边界**：PyInstaller 仅作为**构建期**工具，不进入运行时依赖树。
+
+**2. `ctypes` 直调 Win32 / COM，而非封装库**
+
+| 能力 | 实现路径 | 关键细节 |
+| :--- | :--- | :--- |
+| 真实系统图标 | Shell COM `IShellItemImageFactory::GetImage` → 回退 `SHGetFileInfoW` + `DrawIconEx` → 回退 emoji | 提取 48×48 带 alpha 的真彩位图，能正确解析 Steam / UWP 快捷方式的**目标程序**图标，而非通用箭头 |
+| PNG 编码 | `zlib` + `struct` 手写 chunk | 将 HBITMAP 的 BGRA 像素转换为 RGBA 并编码，供 tkinter 直接显示 |
+| CPU 占用 | `GetSystemTimes` 两次采样求差 | `kernel` 时间**已包含** `idle`，故占用率为 `(Δkernel + Δuser − Δidle) / (Δkernel + Δuser)`——少减一次 idle 就会得到恒定偏高的错误读数 |
+| 网速 | `iphlpapi.GetIfTable2` 64 位计数器差分 | 主动弃用 32 位 `MIB_IFROW`，规避现代 Windows 上的计数器回绕 |
+| 全局热键 | `RegisterHotKey` + `WM_HOTKEY` 消息过滤 | 与 Tk 事件循环共存，不劫持主线程消息泵 |
+| 快捷方式 | `IShellLinkW` + `IPersistFile` | 零依赖生成带自定义图标的 `.lnk` |
+
+**3. Canvas 逐像素自绘 UI + 设计令牌收敛**
+
+胶囊渐变按钮、圆角输入框、圆角勾选框、线性图标全部由 `Canvas` 绘制，而非原生控件——因为 `ttk` 的可定制上限无法满足视觉稿。
+
+随之而来的问题是数值失控：整理前，**间距在 177 处使用了 18 个不同取值、字号在 93 处使用了 13 个取值**，进度条高度并存 8px / 10px 两套。`gui/tokens.py` 将这一切收敛为两把标尺——页面只声明"语义"（区块间距 / 控件间距 / 标题字号），具体像素由令牌统一裁决。配合 Per-Monitor DPI 感知与等比缩放，界面在 100%–200% 缩放下均保持清晰。
+
+**4. 配置持久化的三层数据保险**
+
+`core/config.py` 的写入路径为：**临时文件 → `flush` + `fsync` → `os.replace` 原子替换**，并在替换前保留上一份健康配置为 `.bak`；读取时若主文件损坏，自动回退 `.bak`，同时把损坏文件隔离为 `config.json.corrupt-<timestamp>` 而不是静默删除。
+
+这解决的是桌面工具最容易被忽视的事故：**在写入途中断电或强杀进程，用户的分类与倒计时会整体归零**。`os.replace` 在 Windows 上同样是原子语义，这一点常被误认为只有 POSIX 才具备。
+
+**5. 「拒绝静默失效」的失败设计**
+
+- **AI 调用**：`core/ai_client.py` 对 401（Key 无效）、429（限流 / 额度耗尽）、5xx、`URLError`、超时逐类映射为可读文案，任何异常都不向上抛出。UI 侧以子线程发请求、主线程回调刷新，输入框在等待期间保持可用。
+- **图标提取**：三级回退（COM → Win32 → emoji），保证任何一项都有视觉表示。
+- **配置校验**：字段缺失走迁移补全，非法值回落默认，写盘失败给出明确提示而非吞掉异常。
+- **撤销**：`core/undo.py` 用**多步撤销栈**替代早期的单变量 `_last_op`。旧实现中"批量移动一批 → 右键再动一项 → 撤销"只会回退最后一步，批量记录凭空消失；改为栈后每一步均可回退，并设深度上限防止无限堆积。
+
+**6. 可测试性是被架构保证的**
+
+`core/` 的纯逻辑（配置原子写、扫描健壮性、AI 客户端错误分支、倒计时计算、撤销栈）全部可在无 GUI 环境下测试；`tests/` 另有 GUI 冒烟测试，在无显示环境下自动跳过而非失败。CI 覆盖 **Windows + Ubuntu × Python 3.10 / 3.11 / 3.12 / 3.13** 共 8 个组合。
+
+### 主张与证据对照
+
+面试中最容易被追问的是"你怎么证明"。下表把每条主张映射到可验证的代码位置：
+
+| 主张 | 可验证证据 |
+| :--- | :--- |
+| 运行时零依赖 | `requirements.txt` 仅含注释；全仓库无第三方 `import` |
+| 原子写与损坏恢复 | `core/config.py` → `save()` / `_save_atomic()` / `_load()` / `_quarantine()` |
+| 系统图标提取 | `core/icons.py` → COM 优先、Win32 回退、纯标准库 PNG 编码 |
+| 系统状态采集 | `core/sysinfo.py` → CPU 差分公式、`GlobalMemoryStatusEx`、`GetIfTable2` |
+| 设计规范落地 | `gui/tokens.py` 全量令牌；页面中无裸像素常量 |
+| 桌宠物理表现 | `gui/pet.py` 抓取 / 重力 / 反弹 / 落地压缩状态机 |
+| 多步撤销 | `core/undo.py` → `UndoStack`，含栈深上限 |
+| 测试与 CI | `tests/` 5 个测试文件，62 项用例；`.github/workflows/tests.yml` 矩阵构建 |
+
+---
+
+## 快速开始
+
+### 环境要求
+
+| 项目 | 要求 |
+| :--- | :--- |
+| 操作系统 | Windows 10 / 11（图标提取、热键、系统采集依赖 Win32；其他平台可启动但功能降级） |
+| Python | 3.10+（CI 覆盖至 3.13） |
+| tkinter | 随 python.org 官方安装包提供；安装时需勾选 **tcl/tk and IDLE** |
+| 第三方库 | **无** |
+
+### 1. 获取代码
+
+```bash
+git clone https://github.com/shi-jin0825/SJ-desktop-manager.git
+cd SJ-desktop-manager
+```
+
+### 2. 安装依赖
+
+本项目无第三方运行时依赖，**无需 `pip install`**。仅需确认 `tkinter` 可用：
+
+```bash
+python -c "import tkinter; print('tkinter OK', tkinter.TkVersion)"
+```
+
+若报 `ModuleNotFoundError: No module named 'tkinter'`，说明安装 Python 时未勾选 tcl/tk 组件，请重新运行官方安装包并勾选该组件（conda 用户可执行 `conda install tk`）。
+
+`requirements.txt` 保留用于声明"零依赖"这一契约，执行 `pip install -r requirements.txt` 不会安装任何包。
+
+### 3. 配置智谱 API Key
+
+AI 助手能力依赖智谱开放平台的免费模型 `glm-4-flash`。Key 通过环境变量 `ZHIPU_API_KEY` 注入，**源码中不含任何密钥**。
+
+**第一步：获取 Key**
+
+访问 [智谱开放平台](https://open.bigmodel.cn/) → 注册 / 登录 → 右上角「API Keys」→ 创建并复制密钥。
+
+**第二步：写入环境变量**（任选一种）
+
+PowerShell，仅当前窗口有效：
+
+```powershell
+$env:ZHIPU_API_KEY = "your_api_key_here"
+```
+
+PowerShell / CMD，永久写入当前用户（**推荐**，需新开终端生效）：
+
+```powershell
+setx ZHIPU_API_KEY "your_api_key_here"
+```
+
+CMD，仅当前窗口有效：
+
+```cmd
+set ZHIPU_API_KEY=your_api_key_here
+```
+
+**第三步：验证**
+
+```powershell
+# PowerShell
+$env:ZHIPU_API_KEY
+
+# CMD
+echo %ZHIPU_API_KEY%
+```
+
+> **注意**：`setx` 只影响此后新启动的进程。若程序已在运行，请关闭并重新启动，或在设置页重开 AI 对话窗口。
+>
+> **为何不支持 `.env` 文件**：读取 `.env` 需要引入 `python-dotenv`，与"零第三方依赖"的约束冲突。系统环境变量同样是业界标准的密钥注入方式，且在打包后的 exe 中行为一致。未配置 Key 时，除 AI 对话外的所有功能均可正常使用。
+
+### 4. 运行
 
 ```bash
 python main.py
 ```
 
-要求 Windows 10+ 与 Python 3.8+。首次运行会在项目根目录生成 `config.json`。
+或直接双击项目根目录的 `run.bat`——它会按「`MOMO_PYTHON` → `py -3` → PATH → 常见安装目录 → 便携运行时」的顺序自动探测可用的 Python，无需手动配置路径。
 
-`run.bat` 的探测顺序：`MOMO_PYTHON` / `PYTHONW` 环境变量 → `py -3` 启动器 →
-PATH 里的 `pythonw.exe` / `python.exe` → 常见安装目录
-（`%LOCALAPPDATA%\Programs\Python`、`C:\Python3x`、`D:\Python3x`）→
-仓库自带的 `runtime\pythonw.exe`。都不中时给出安装 / 用 exe 的提示。
+启动后：
 
-### 打包成 exe（给没有 Python 的电脑）
+- 首次运行会自动扫描桌面并生成磁贴，`config.json` 在首次保存时创建；
+- 默认全局热键 `Ctrl+Alt+M` 呼出 / 隐藏窗口，可在「设置 → 全局热键」中修改；
+- 右键磁贴可移入分类，侧边栏顶部搜索框支持即时过滤。
 
-```bash
-pip install pyinstaller          # 仅是构建期工具，运行时依然零第三方依赖
-python tools/build_exe.py        # 产物：dist\墨墨桌面管理助手.exe
-python tools/build_exe.py --dir  # 或打包成目录（启动更快）
-```
-
-这个 exe 单文件、免安装，拷到任何一台 Windows 电脑双击即可运行
-（不需要装 Python，图标与 `assets/` 已一并打进去）。
-
-## AI 对话（智谱 GLM 大模型）
-
-墨墨接入了智谱 AI 的免费模型 `glm-4-flash`，调用代码封装在
-`core/ai_client.py` 里（`ask_ai(question, system_prompt)` 函数），
-**网络请求绝不混在 UI 主程序里**；UI 侧通过 `App.ask_momo(...)` 起
-子线程发请求、主线程刷新界面，不会出现「未响应」。
-
-### 配置 API Key（必读）
-
-Key 从环境变量 `ZHIPU_API_KEY` 读取，**不要写进源码**。配置方法：
-
-1. 到 [智谱开放平台](https://open.bigmodel.cn/) 注册并创建 API Key
-   （免费模型 `glm-4-flash` 有免费额度）。
-2. 设置环境变量（三选一）：
-
-   - **PowerShell（当前用户，永久）**
-     ```powershell
-     [Environment]::SetEnvironmentVariable("ZHIPU_API_KEY", "你的Key", "User")
-     ```
-   - **CMD（当前用户，永久）**
-     ```cmd
-     setx ZHIPU_API_KEY "你的Key"
-     ```
-   - **代码里临时设置（仅当前进程）**
-     ```python
-     import os
-     os.environ["ZHIPU_API_KEY"] = "你的Key"
-     ```
-
-3. **重启程序**让环境变量生效，即可开始对话。
-
-未配置 Key、断网、Key 无效或余额不足时，墨墨会友好地回一句
-「墨墨现在有点头晕（网络错误）」之类的提示，**程序不会崩溃**。
-
-### 调用方式
-
-```python
-from core.ai_client import ask_ai
-
-# 子线程里调用（1-3 秒），返回文本
-answer = ask_ai("帮我写一句今日待办", "你是桌面助手墨墨")
-```
-
-UI 集成示例见 `tools/ai_demo.py`（直接 `py -3 tools/ai_demo.py` 可跑），
-核心三步：输入框 + 按钮 → `App.ask_momo(问题, on_start=显示思考中,
-on_done=显示回复)` → 气泡/弹窗展示。
-
-## 数据安全
-
-`config.json` 存着你所有的分类、归类关系和倒计时，写入方式做了三重保险：
-
-- **原子写入**：先写 `config.json.tmp` 并 `fsync`，再用 `os.replace` 整体替换，
-  断电 / 崩溃不会留下半截文件
-- **自动备份**：每次成功写入前，把上一份好配置留成 `config.json.bak`
-- **损坏可恢复**：主文件读不出来时自动回退 `.bak`，并把损坏原件改名成
-  `config.json.corrupt-<时间戳>` 留给你检查；只有在备份也损坏时才回默认配置，
-  而且会明确提示，不会静默清零
-
-## 专属图标与快捷方式
-
-当前应用图标 `assets/momo.ico` 来自吉祥物「墨墨」（墨绿色小章鱼，见 `assets/mascot.png`），
-由 `tools/mascot_to_ico.py` 生成（自动裁边去水印、四角圆角透明，内嵌 256/64/48/32/16
-五个尺寸，纯 Python 标准库实现）。另保留备选图标 `assets/app-grid.ico`
-（`tools/make_icon.py` 合成的蓝色圆角底 + 3×3 真实应用图标样式）。
-
-`tools/make_shortcut.py` 可以一键在桌面创建指向本程序的快捷方式并应用图标
-（通过 ctypes 直接调用 `IShellLinkW` + `IPersistFile` COM 接口，同样零依赖），
-旧名快捷方式会被自动重命名：
-
-```bash
-python tools/mascot_to_ico.py   # 从吉祥物图生成 assets/momo.ico
-python tools/make_icon.py       # 重新生成备选图标 assets/app-grid.ico
-python tools/make_shortcut.py   # 在桌面创建/更新快捷方式
-```
-
-## 项目结构
-
-```
-SJ-desktop-manager/
-├── main.py                # 启动入口（先声明 DPI 感知，再建窗口）
-├── run.bat                # 一键启动（自动探测 Python，pythonw 无黑框）
-├── core/
-│   ├── scanner.py         # 桌面项扫描（过滤隐藏/系统文件，同名不同路径都保留）
-│   ├── config.py          # 分类 / 倒计时 / 设置持久化（原子写 + 备份 + 可恢复）
-│   ├── countdown.py       # 倒数日计算（日期解析、每年循环、剩余天数）
-│   ├── icons.py           # 系统图标提取（Shell COM + 纯标准库 PNG 编码 + LRU 缓存）
-│   ├── sysinfo.py         # 系统状态采集（CPU/内存/网速，ctypes 直调 Win32，喂桌宠）
-│   ├── hotkey.py          # 全局热键（RegisterHotKey + WM_HOTKEY 过滤轮询）
-│   ├── ai_client.py       # 智谱 GLM 大模型调用（独立封装，网络请求不进 UI）
-│   ├── dpi.py             # 高 DPI 感知声明
-│   └── undo.py            # 多步撤销栈（纯逻辑，不依赖 tkinter）
-├── gui/
-│   ├── app.py             # 主框架：侧边栏 + 页面路由（页面实例缓存）
-│   ├── pages.py           # 五个页面：首页 / 分类 / 统计 / 倒计时 / 设置
-│   ├── widgets.py         # 通用控件（胶囊渐变按钮、圆角搜索框、图标缩放…）
-│   ├── navicons.py        # 自制统一线性图标（24×24 Canvas 矢量绘制）
-│   ├── theme.py           # 浅色 / 深色主题配色表
-│   ├── fonts.py           # 字体常量 + 缺失回退（无微软雅黑时自动降级）
-│   ├── tokens.py          # 设计令牌：间距 / 字号 / 控件尺寸统一标尺
-│   ├── category_ops.py    # 分类 新建/重命名/删除 的公共层（三处共用）
-│   └── pet.py             # 桌面悬浮宠物（物理引擎 / 系统联动 / 番茄钟）
-├── tools/
-│   ├── build_exe.py       # PyInstaller 一键打包成 exe
-│   ├── ai_demo.py         # AI 对话 UI 集成示例（输入框 + 对话按钮 + 气泡）
-│   ├── make_icon.py       # 合成备选 .ico 图标
-│   ├── mascot_to_ico.py   # 吉祥物图 -> 应用 .ico
-│   └── make_shortcut.py   # 创建/更新桌面快捷方式
-├── tests/
-│   ├── test_core.py       # core 层单测（倒计时 / 配置 / 撤销栈 / 图标缓存 key）
-│   ├── test_ai_client.py  # AI 客户端单测（Key 读取 / 请求体 / 兜底文案）
-│   ├── test_gui.py        # gui 层单测（字体解析 / 胶囊按钮）
-│   └── test_design.py     # 设计令牌守护（间距 / 字号不许再写散值）
-├── assets/                # 图标、吉祥物图与截图
-└── config.json            # 首次运行自动生成（已在 .gitignore 中）
-```
-
-## 测试
+### 5. 运行测试
 
 ```bash
 python -m unittest discover -s tests -v
 ```
 
-覆盖：
+预期输出 `Ran 62 tests ... OK`。GUI 冒烟测试在无显示环境下会自动跳过（`skipped`），不影响结果。
 
-* `core.countdown`（日期解析、闰年循环 2/29→2/28、进度区间）
-* `core.config`（原子写 / 备份 / 损坏恢复 / 路径 key 迁移 / 失效清理 / 批量归类）
-* `core.undo`（批量操作不被单项覆盖、深度封顶、按分类归并还原）
-* `core.icons`（缓存 key 的斜杠 / 大小写变体归一）
-* `gui.fonts` 与胶囊按钮（无 tkinter 的环境自动跳过）
+### 6. 打包为单文件 exe
 
-## 许可
+```bash
+python tools/build_exe.py
+```
 
-MIT，见 [LICENSE](LICENSE)。
+产物位于 `dist/墨墨桌面管理助手.exe`，可在未安装 Python 的 Windows 机器上直接运行。构建依赖 PyInstaller，但**产物运行时不依赖任何第三方库**。
+
+---
+
+## 项目结构
+
+```text
+SJ-desktop-manager/
+├── main.py                  # 入口：DPI 感知 → 启动 App
+├── run.bat                  # 免配置启动器（自动探测 Python）
+├── requirements.txt         # 声明零第三方依赖
+│
+├── core/                    # 领域层：纯逻辑，禁止 import tkinter
+│   ├── config.py            #   配置原子写 / 备份 / 损坏隔离 / 迁移
+│   ├── scanner.py           #   桌面扫描（含公共桌面、隐藏项过滤）
+│   ├── icons.py             #   系统图标提取 + 纯标准库 PNG 编码
+│   ├── sysinfo.py           #   CPU / 内存 / 网速采集
+│   ├── ai_client.py         #   智谱 GLM 客户端（含全错误分支兜底）
+│   ├── hotkey.py            #   全局热键注册与消息过滤
+│   ├── countdown.py         #   倒数日 / 番茄钟时间计算
+│   ├── undo.py              #   多步撤销栈
+│   └── dpi.py               #   Per-Monitor DPI 感知
+│
+├── gui/                     # 表现层：tkinter
+│   ├── app.py               #   主窗口、侧边栏、页面路由、全局搜索
+│   ├── pages.py             #   首页 / 分类 / 统计 / 时间管理 / 设置
+│   ├── widgets.py           #   Canvas 自绘控件（胶囊按钮 / 圆角框 / 勾选框）
+│   ├── pet.py               #   桌宠「墨墨」物理引擎与状态联动
+│   ├── theme.py             #   浅色 / 深色主题
+│   ├── tokens.py            #   设计令牌（间距 / 字号 / 控件尺寸）
+│   ├── fonts.py             #   字体与 DPI 缩放
+│   ├── navicons.py          #   侧边栏线性图标
+│   └── category_ops.py      #   分类交互编排
+│
+├── tests/                   # 62 项自动化测试
+│   ├── test_core.py         #   配置 / 扫描 / 倒计时 / 撤销
+│   ├── test_ai_client.py    #   AI 客户端错误分支（含 Mock 网络）
+│   ├── test_gui.py          #   GUI 冒烟
+│   ├── test_pages_smoke.py  #   页面实例化冒烟
+│   └── test_design.py       #   设计令牌一致性
+│
+├── tools/                   # 构建与素材生成脚本（不进入运行时）
+│   ├── build_exe.py         #   PyInstaller 单文件打包
+│   ├── make_icon.py         #   .ico 生成
+│   ├── make_shortcut.py     #   .lnk 生成
+│   ├── momo_faces.py        #   7 种表情程序化绘制
+│   └── mascot_cutout.py     #   立绘抠图
+│
+├── assets/                  # 界面截图、图标、桌宠立绘
+└── .github/workflows/       # CI：2 OS × 4 Python 版本
+```
+
+---
+
+## 测试与持续集成
+
+```text
+Ran 62 tests in 0.46s
+OK (skipped=12)
+```
+
+- **覆盖范围**：`core/` 纯逻辑（配置原子写、损坏恢复、扫描健壮性、倒计时与番茄钟状态机、撤销栈）、`ai_client` 的全部错误分支（401 / 429 / 5xx / 超时 / 无 Key，均以 Mock 注入）、GUI 与页面实例化冒烟、设计令牌一致性。
+- **CI 矩阵**：`ubuntu-latest` + `windows-latest` × Python `3.10 / 3.11 / 3.12 / 3.13`，共 8 个组合，任一失败即红。
+- **跳过策略**：无显示环境下的 GUI 用例自动 `skip` 而非 `fail`，避免 CI 噪声掩盖真实回归。
+
+```bash
+# 全量测试
+python -m unittest discover -s tests -v
+
+# 仅核心逻辑
+python -m unittest tests.test_core -v
+```
+
+---
+
+## 常见问题
+
+<details>
+<summary><b>启动时报 <code>No module named 'tkinter'</code></b></summary>
+
+Python 安装时未包含 tcl/tk 组件。Windows 请重新运行 [python.org](https://www.python.org/downloads/) 安装包并勾选 **tcl/tk and IDLE**；conda 环境执行 `conda install tk`。
+</details>
+
+<details>
+<summary><b>AI 对话提示「还没拿到 API Key」</b></summary>
+
+环境变量未生效。确认变量名为 `ZHIPU_API_KEY`（全大写），并使用 `setx` 写入后**新开终端**；程序启动后才设置的变量对当前进程不可见，需重启程序。
+</details>
+
+<details>
+<summary><b>AI 提示「Key 好像不对」或「额度用完了」</b></summary>
+
+分别对应 HTTP 401 与 429。前者请检查 Key 是否复制完整、是否已在智谱平台启用；后者为免费额度耗尽或瞬时限流，稍后重试即可。这两类错误均不会导致程序崩溃。
+</details>
+
+<details>
+<summary><b>磁贴里出现通用箭头图标</b></summary>
+
+说明该快捷方式的目标已失效（程序被卸载或路径变更），三级图标回退机制退到了默认图标。删除该快捷方式即可。
+</details>
+
+<details>
+<summary><b>能否在 macOS / Linux 上运行？</b></summary>
+
+可以启动，但系统图标提取、全局热键、CPU / 内存 / 网速采集均为 Win32 实现，会降级为 emoji 图标并关闭对应功能。本项目定位是 Windows 桌面工具。
+</details>
+
+<details>
+<summary><b>分类操作会移动或删除我的桌面文件吗？</b></summary>
+
+不会。分类仅记录"路径 → 分类名"的映射关系，存于 `config.json`；移出分类只是删除该映射。所有文件操作均不涉及移动、重命名或删除。
+</details>
+
+---
+
+## Roadmap
+
+- [ ] 桌面项多选与批量拖拽分类
+- [ ] 分类自定义图标与排序
+- [ ] 番茄钟与系统勿扰模式（Focus Assist）联动
+- [ ] 可选的多 Provider 适配层（保持 OpenAI 兼容协议，默认仍为智谱）
+
+---
 
 ## 更新日志
 
@@ -756,21 +927,168 @@ MIT，见 [LICENSE](LICENSE)。
 
 - 桌面扫描、分类管理、双击打开、F5 刷新
 
-## Roadmap
-
-- [ ] 拖拽分配项目到分类
-- [x] 提取快捷方式真实图标
-- [x] 多页面（侧边栏切换首页 / 分类 / 统计 / 设置）
-- [x] 倒数日提醒（专属倒计时）
-- [ ] 倒计时到期桌面通知
-- [ ] 开机自启动
-- [ ] 单实例锁（重复启动让第二个实例直接聚焦已有窗口，而不是热键降级）
-- [x] 记住窗口位置与大小
-- [ ] 系统托盘图标（热键隐藏后仍有常驻入口）
-- [ ] 排序选项（文件夹优先 / 按类型 / 按时间，现在只有按名称）
-- [ ] 按扩展名自动归类规则（如 `*.lnk` 自动进「工具」）
-- [x] GitHub Actions 跑 `unittest`（`.github/workflows/tests.yml`）
 
 ## License
 
-MIT
+本项目基于 [MIT License](LICENSE) 开源，Copyright © 2026 [shi-jin0825](https://github.com/shi-jin0825)。
+
+---
+
+<a id="english"></a>
+
+# English
+
+<div align="center">
+
+**MoMo Desktop Manager** — a Windows desktop organizer that maps your cluttered desktop into a clean, phone-style tile board.
+
+[![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?style=flat-square&logo=python&logoColor=white)](https://www.python.org/downloads/)
+[![License](https://img.shields.io/badge/License-MIT-yellow.svg?style=flat-square)](LICENSE)
+[![Dependencies](https://img.shields.io/badge/Runtime%20Dependencies-0-brightgreen?style=flat-square)](#engineering-highlights)
+[![Tests](https://img.shields.io/badge/tests-62%20passing-success?style=flat-square)](#testing--ci)
+
+</div>
+
+## Overview
+
+For two decades, organizing a Windows desktop has meant one of two things: dragging icons around by hand, or giving up entirely. Most "desktop beautification" tools replace the shell, leave registry residue behind, and break on uninstall.
+
+MoMo takes a different route. It does not take over your desktop — it **maps** the files, folders and shortcuts already there into an adaptive, icon-accurate tile board with folders, categories and instant search. **No file is ever moved, renamed or deleted.**
+
+Under the hood, the project holds a deliberately strict constraint: **zero third-party runtime dependencies.** The UI is built with `tkinter`; system icon extraction, CPU / memory / network sampling, global hotkeys and shortcut creation all go through `ctypes` into Win32 and COM directly. Even PNG encoding is hand-written on top of `zlib` and `struct`. The result is **v1.13.2 across 31 releases, ~10,300 lines of Python, 62 automated tests**, and a cross-platform CI matrix.
+
+> In one sentence: a desktop tool that treats *"one less dependency"* as an architectural constraint rather than an excuse.
+
+## Demo
+
+> **📌 GIF placeholder** — record 10–15 seconds (tile sorting → global search → pet → pomodoro), export as `assets/demo.gif`, then uncomment the line below.
+>
+> ```markdown
+> <!-- ![MoMo Demo](assets/demo.gif) -->
+> ```
+
+| Tile board (light) | Tile board (dark) |
+| :---: | :---: |
+| ![Home](assets/screenshot.png) | ![Dark](assets/screenshot-dark.png) |
+| **Time management** | **Statistics** |
+| ![Time](assets/screenshot-countdown.png) | ![Stats](assets/screenshot-stats.png) |
+
+## Features
+
+- **Desktop mapping** — scans desktop and public desktop for files, folders, `.lnk` and `.url`, filtering hidden/system entries. Tiles reflow from 4 to 16 columns; folder tiles preview the first 9 child icons in a 3×3 grid.
+- **Categories without side effects** — phone-style folders backed by a path→category map in `config.json`. Right-click to file items in or out; nothing on disk changes.
+- **Global access** — type-to-filter search in the sidebar, Enter opens the first hit; a customizable global hotkey (default `Ctrl+Alt+M`) summons the window when hidden; full light/dark theming, persisted.
+- **Desktop pet "MoMo"** — a separate always-on-top window with a small physics model: grab-and-throw, gravity, wall bounce, landing squash. Click to pet, rapid-click to make it shy. It sweats when CPU is high, looks tired when memory is low, and sprints when the network is fast.
+- **Time management** — dated and undated tasks with drag-to-reorder, recurring countdowns with progress bars, and a pomodoro timer that survives restarts, supports second-accurate pause/resume, multi-round breaks, and sound + taskbar-flash + auto-summon alerts.
+- **AI assistant** — an in-app chat panel backed by Zhipu `glm-4-flash`. Requests run on a worker thread with a main-thread callback; every failure mode (offline, missing key, rate limit) degrades to a readable message instead of an exception.
+
+## Engineering Highlights
+
+**1. Zero runtime dependencies as a design language.** `requirements.txt` contains a single comment line — not an oversight, a trade-off. Clone and run; single-file executables stay small; no supply-chain surface and no version conflicts. The cost is real: icon decoding, PNG encoding and animation physics had to be implemented from scratch. PyInstaller is a *build-time* tool only and never enters the runtime tree.
+
+**2. `ctypes` into Win32 / COM instead of wrapper libraries.**
+
+| Capability | Implementation | Detail that matters |
+| :--- | :--- | :--- |
+| Real system icons | Shell COM `IShellItemImageFactory::GetImage`, fallback `SHGetFileInfoW` + `DrawIconEx`, then emoji | Resolves the *target* icon of Steam / UWP shortcuts rather than a generic arrow; 48×48 with alpha |
+| PNG encoding | `zlib` + `struct`, hand-written chunks | Converts BGRA bitmaps to RGBA for direct display in tkinter |
+| CPU usage | `GetSystemTimes` sampled twice | `kernel` time already includes `idle`, so usage is `(Δkernel + Δuser − Δidle) / (Δkernel + Δuser)` |
+| Network throughput | `iphlpapi.GetIfTable2` 64-bit counters | Deliberately avoids 32-bit `MIB_IFROW` wraparound on modern Windows |
+| Global hotkey | `RegisterHotKey` + `WM_HOTKEY` filtering | Coexists with Tk's event loop without hijacking the message pump |
+
+**3. Canvas-drawn UI, governed by design tokens.** Pill-shaped gradient buttons, rounded inputs and checkboxes are painted on `Canvas` because `ttk` cannot be themed that far. The predictable failure mode followed: spacing had drifted to **18 distinct values across 177 call sites**, type sizes to **13 values across 93 sites**. `gui/tokens.py` collapsed this into two scales — pages declare intent, tokens decide pixels — alongside per-monitor DPI awareness.
+
+**4. Three layers of data protection.** Every write goes *temp file → `flush` + `fsync` → `os.replace`*, keeping the previous healthy file as `.bak`. On read, a corrupt primary silently recovers from `.bak` and quarantines the damaged file as `config.json.corrupt-<timestamp>` instead of deleting it. This addresses the failure users never forgive: losing every category and countdown because the process died mid-write. (`os.replace` is atomic on Windows too — a widely held misconception.)
+
+**5. Failure paths that refuse to fail silently.** `core/ai_client.py` maps 401, 429, 5xx, `URLError` and timeouts to human-readable messages and never re-raises. Icon extraction degrades through three tiers so every item stays visible. Config validation migrates missing fields and rejects invalid ones. `core/undo.py` replaced a single `_last_op` variable with a bounded multi-step stack — the old code lost batch operations whenever a right-click followed them.
+
+**6. Testability enforced by architecture.** `core/` never imports `tkinter`, so domain logic runs under plain `unittest` in headless environments; GUI smoke tests skip rather than fail when no display is available. CI covers Windows and Ubuntu across Python 3.10–3.13.
+
+## Quick Start
+
+**Requirements:** Windows 10/11 · Python 3.10+ with `tkinter` (tick *tcl/tk and IDLE* in the official installer) · **no third-party packages**.
+
+**Step 1 — clone and verify the toolchain**
+
+```bash
+git clone https://github.com/shi-jin0825/SJ-desktop-manager.git
+cd SJ-desktop-manager
+
+# Nothing to pip install; just confirm tkinter ships with your interpreter
+python -c "import tkinter; print('tkinter OK', tkinter.TkVersion)"
+```
+
+**Step 2 — provide the Zhipu API key** (PowerShell)
+
+```powershell
+# Persist for the current user, then open a new terminal
+setx ZHIPU_API_KEY "your_api_key_here"
+
+# ...or export for this session only
+$env:ZHIPU_API_KEY = "your_api_key_here"
+```
+
+**Step 3 — run**
+
+```bash
+python main.py          # or double-click run.bat
+```
+
+The key is read from `ZHIPU_API_KEY` at request time and never appears in source. Get one at [open.bigmodel.cn](https://open.bigmodel.cn/) → *API Keys*. A `.env` file is intentionally unsupported, since parsing it would require `python-dotenv` and violate the zero-dependency constraint; OS-level environment variables behave identically inside the packaged `.exe`. Without a key, every feature except AI chat still works.
+
+```bash
+# Run the test suite (expect: Ran 62 tests ... OK)
+python -m unittest discover -s tests -v
+
+# Build a standalone single-file executable -> dist/
+python tools/build_exe.py
+```
+
+The app auto-scans the desktop on first launch. Default hotkey is `Ctrl+Alt+M`; right-click any tile to file it into a category; the sidebar search filters as you type.
+
+## Project Structure
+
+```text
+main.py              entry point (DPI awareness -> App)
+run.bat              launcher with automatic Python discovery
+core/                domain layer, tkinter-free and unit-testable
+  config.py          atomic writes, backup, corruption quarantine, migration
+  scanner.py         desktop scanning, hidden/system filtering
+  icons.py           COM/Win32 icon extraction + stdlib PNG encoder
+  sysinfo.py         CPU / memory / network sampling
+  ai_client.py       Zhipu GLM client with exhaustive error handling
+  hotkey.py undo.py countdown.py dpi.py
+gui/                 presentation layer (tkinter)
+  app.py pages.py widgets.py pet.py theme.py tokens.py fonts.py navicons.py
+tests/               62 tests: core logic, AI error branches, GUI smoke, tokens
+tools/               build and asset-generation scripts (not shipped)
+assets/              screenshots, icons, pet sprites
+.github/workflows/   CI: 2 operating systems x 4 Python versions
+```
+
+## Testing & CI
+
+`Ran 62 tests in 0.46s — OK (skipped=12)`
+
+Coverage spans atomic config writes and corruption recovery, scanner robustness, countdown and pomodoro state machines, the undo stack, every `ai_client` error branch (401/429/5xx/timeout/missing key via mocks), plus GUI instantiation smoke tests and design-token consistency. The GitHub Actions matrix runs Ubuntu and Windows against Python 3.10–3.13 — eight combinations, any failure turns the build red. Headless GUI cases are skipped, not failed, so CI noise never hides a real regression.
+
+## FAQ
+
+- **`No module named 'tkinter'`** — reinstall Python with the *tcl/tk and IDLE* component, or run `conda install tk`.
+- **"Key not found"** — the variable must be `ZHIPU_API_KEY`; after `setx`, open a new terminal and restart the app.
+- **HTTP 401 / 429** — invalid key / exhausted free quota. Both degrade gracefully; the app will not crash.
+- **Generic arrow icons** — the shortcut's target no longer exists, so extraction fell back to the default icon.
+- **Does categorizing move my files?** — No. Categories are a path→name map in `config.json`. Nothing is moved, renamed or deleted.
+
+## License
+
+[MIT](LICENSE) © 2026 [shi-jin0825](https://github.com/shi-jin0825)
+
+---
+
+<div align="center">
+
+**如果这个项目对你有帮助，欢迎点一个 ⭐ Star。**
+*If this project helps you, a ⭐ star is appreciated.*
+
+</div>
