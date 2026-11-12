@@ -1,25 +1,24 @@
 # -*- coding: utf-8 -*-
-"""墨墨桌面管理助手 —— 功能演示动图录制脚本（全屏桌面视角）。
+"""墨墨桌面管理助手 —— 功能演示录制脚本（纯净主窗口视角 + MP4 优先）。
 
-自动启动 App，逐场景驱动关键界面与悬浮桌宠，用 Pillow 截取**整个屏幕**、
-把桌宠窗口（overrideredirect 分层窗口，GDI 截屏抓不到）用 Win32
-`PrintWindow` 单独抓取后合成到画面中，再缩放并合成 GIF。
+自动启动 App、预置一份真实感的演示数据（8 个分类、30+ 桌面项目、2 条
+计划、1 条倒计时、番茄钟进行中），驱动一条完整操作链：
 
-输出：assets/demo.gif（供 README「功能演示」引用）。
+    首页 → 右键移入分类 → 全局搜索 → 打开分类 → 时间管理启动番茄钟
+         → 摸头桌宠 → 数据统计（数字变化）
+
+画面只截取主窗口区域（四周不留桌面壁纸/任务栏/其它窗口），桌宠用
+Win32 `PrintWindow` 单独抓取后合成。输出 **MP4**（H.264，体积小、画质
+无 256 色量化损失），GIF 仅作降级备用。
 
 零运行时依赖原则：本脚本只用于开发期生成素材，不进入应用运行时；
-依赖 Pillow（构建期工具，类比 PyInstaller）。
+依赖 Pillow（截图）+ imageio-ffmpeg（编码 MP4），均为构建期工具。
 
 用法：
-    py -3 tools/record_demo.py            # 录制全部场景（全屏桌面视角）
-    py -3 tools/record_demo.py --list     # 只看场景清单
-    py -3 tools/record_demo.py --frames N # 每个场景抓 N 帧（默认 6）
-    py -3 tools/record_demo.py --width 1280 --height 800   # 输出尺寸
-
-说明：
-- 需要真实显示环境（Windows 桌面会话），无头环境会跳过。
-- 悬浮桌宠会被拉到主窗口右侧入镜，并用 PrintWindow 单独抓取合成。
-- 场景切换用 App 内部方法驱动，稳定可复现。
+    py -3 tools/record_demo.py                 # 录制 MP4 + GIF
+    py -3 tools/record_demo.py --list          # 只看操作链清单
+    py -3 tools/record_demo.py --mp4-only      # 只要 MP4
+    py -3 tools/record_demo.py --width 1180 --height 760   # 输出尺寸
 """
 import argparse
 import ctypes
@@ -34,17 +33,17 @@ if _ROOT not in sys.path:
 
 import tkinter as tk
 
-SCENES = (
-    ("home",       "首页磁贴"),
-    ("search",     "全局搜索"),
-    ("categories", "分类体系"),
-    ("countdowns", "时间管理"),
-    ("stats",      "数据统计"),
-    ("settings",   "设置页"),
-    ("ai_chat",    "AI 助手对话"),
-    ("pet",        "呼出桌宠"),
-    ("pomodoro",   "番茄钟"),
-)
+# 演示用的临时占位文件（.lnk 会因无目标而打开失败，用普通文件即可，
+# 录制时创建、结束后删除，绝不污染用户桌面）。
+DEMO_FILES = [
+    "项目策划书.docx", "季度财务报表.xlsx", "产品需求文档.pdf",
+    "周报模板.txt", "会议纪要.txt", "学习笔记.md",
+    "读书清单.txt", "旅行计划.txt", "健身打卡.txt",
+    "数据备份.zip", "壁纸素材.png", "简历初稿.docx",
+]
+
+# 8 个演示分类（覆盖常见桌面整理场景）
+DEMO_CATEGORIES = ["工具", "办公", "娱乐", "学习", "设计", "开发", "影音", "文档"]
 
 PW_RENDERFULLCONTENT = 2
 
@@ -100,13 +99,11 @@ def _position_pet_near_main(app):
     if pet is None:
         return
     try:
-        # 桌宠放进主窗口右上角内侧，确保 bbox 截屏能完整容纳它
         main_left = app.winfo_rootx()
         main_top = app.winfo_rooty()
         main_w = app.winfo_width()
         pet.x = float(main_left + main_w - 160)
         pet.y = float(main_top + 12)
-        # 同时更新浮动中心与速度，避免物理引擎下一帧把桌宠拉回原地面
         pet._base_y = pet.y
         pet.vy = 0.0
         pet.vx = 0.0
@@ -117,18 +114,9 @@ def _position_pet_near_main(app):
 
 
 def grab_frame(app, out_dir, name, out_size, bbox_override=None):
-    """截取墨墨主窗口区域 + 合成桌宠，缩放后存 PNG。
-
-    不再用全屏截屏（会把屏幕上其它无关窗口一并录进去），而是只截主窗口
-    的 bounding box，桌宠用 PrintWindow 单独抓取后按相对坐标合成，
-    保证演示画面纯净、可复现。
-
-    bbox_override：可选，传一个 (x1, y1, x2, y2) 屏幕坐标，用于截取
-    非主窗口的区域（如 AI 对话弹窗），使其完整入镜。
-    """
+    """截取主窗口区域 + 合成桌宠，缩放后存 PNG。"""
     from PIL import ImageGrab, Image
 
-    # 主窗口的屏幕坐标与尺寸
     mx, my = app.winfo_rootx(), app.winfo_rooty()
     mw, mh = app.winfo_width(), app.winfo_height()
     if mw <= 0 or mh <= 0:
@@ -137,21 +125,17 @@ def grab_frame(app, out_dir, name, out_size, bbox_override=None):
     if bbox_override is not None:
         bbox = bbox_override
     else:
-        # 只截主窗口自身区域（桌宠已放进窗口内部），pad=0 杜绝露出其它窗口
         pad = 0
         bbox = (max(0, mx - pad), max(0, my - pad),
                 mx + mw + pad, my + mh + pad)
     frame = ImageGrab.grab(bbox=bbox).convert("RGB")
 
-    # 桌宠单独抓取并贴到相对坐标
     pet = getattr(app, "_pet", None)
     if pet is not None:
         try:
             pet_img, left, top = capture_window(pet.winfo_id())
             if pet_img is not None:
                 pet_rgba = pet_img.convert("RGBA")
-                # 桌宠窗口用 -transparentcolor 做透明，PrintWindow 抓到时
-                # 透明区域被渲染成纯黑 (0,0,0)；把近黑像素置透明避免黑块。
                 px = pet_rgba.load()
                 for y in range(pet_rgba.height):
                     for x in range(pet_rgba.width):
@@ -159,7 +143,6 @@ def grab_frame(app, out_dir, name, out_size, bbox_override=None):
                         if r < 12 and g < 12 and b < 12:
                             px[x, y] = (0, 0, 0, 0)
                 frame = frame.convert("RGBA")
-                # 桌宠坐标换算到 bbox 内的相对位置
                 rel_x, rel_y = left - bbox[0], top - bbox[1]
                 frame.paste(pet_rgba, (rel_x, rel_y), pet_rgba)
                 frame = frame.convert("RGB")
@@ -173,16 +156,98 @@ def grab_frame(app, out_dir, name, out_size, bbox_override=None):
     return path
 
 
+def setup_demo_data(app):
+    """预置演示数据：8 分类 + 临时占位文件 + 全量归类 + 计划 + 倒计时。
+
+    返回一个清理函数，录制结束后调用恢复原状。
+    """
+    from core.scanner import get_desktop_paths, scan_desktop
+    from core.config import item_key
+
+    cfg = app.config_mgr
+    created_files = []
+
+    def cleanup():
+        # 删除临时占位文件
+        for fp in created_files:
+            try:
+                if os.path.isfile(fp):
+                    os.remove(fp)
+            except OSError:
+                pass
+        # 恢复原分类列表（清掉演示多加的分类）
+        for cat in DEMO_CATEGORIES:
+            if cat in cfg.categories and cat not in ("工具", "办公", "娱乐"):
+                cfg.remove_category(cat)
+        # 清掉演示的归类（占位文件对应的 key 已随文件删除失效）
+        for key in list(cfg.data["assignments"].keys()):
+            if any(key.endswith(f) for f in DEMO_FILES):
+                del cfg.data["assignments"][key]
+        # 删掉演示计划与倒计时
+        for p in list(cfg.plans):
+            if p.get("title", "").startswith("演示"):
+                cfg.remove_plan(p["id"])
+        for cd in list(cfg.countdowns):
+            if cd.get("title", "").startswith("演示"):
+                cfg.remove_countdown(cd["id"])
+        cfg.save()
+
+    try:
+        # 1. 确保分类齐全（8 个）
+        for cat in DEMO_CATEGORIES:
+            if cat not in cfg.categories:
+                cfg.add_category(cat)
+
+        # 2. 在用户桌面创建临时占位文件（补齐到 30+ 项目）
+        desktop = get_desktop_paths()[0] if get_desktop_paths() else \
+            os.path.join(os.path.expanduser("~"), "Desktop")
+        for fname in DEMO_FILES:
+            fp = os.path.join(desktop, fname)
+            if not os.path.exists(fp):
+                try:
+                    with open(fp, "w", encoding="utf-8") as f:
+                        f.write("墨墨演示数据\n")
+                    created_files.append(fp)
+                except OSError:
+                    pass
+
+        # 3. 重新扫描，把大部分项目归类到 8 个分类（轮转分配），
+        #    刻意留约 1/3 未归类——首页既要有分类文件夹、也要有零散
+        #    磁贴才充实，右键「移入分类」也有操作对象
+        items = scan_desktop()
+        cats = DEMO_CATEGORIES
+        # 归类前 2/3 的项目，留后 1/3 未归类
+        n_assign = int(len(items) * 2 / 3)
+        idx = 0
+        for it in items[:n_assign]:
+            if cfg.get_category(it.path, it.name):
+                continue
+            cat = cats[idx % len(cats)]
+            cfg.assign(it.path, cat)
+            idx += 1
+
+        # 4. 预置 2 条计划 + 1 条倒计时
+        if not any(p.get("title", "").startswith("演示") for p in cfg.plans):
+            cfg.add_plan("演示：完成项目策划书", date="2026-11-20", note="优先级最高")
+            cfg.add_plan("演示：阅读《架构整洁之道》", note="每天 30 分钟")
+        if not any(c.get("title", "").startswith("演示") for c in cfg.countdowns):
+            cfg.add_countdown("演示：项目上线倒计时", "2026-12-01",
+                              note="还有两周", repeat=False)
+
+    except Exception:
+        pass
+
+    return cleanup
+
+
 def run(out_dir, frames_per_scene, out_size):
     from gui.app import App
 
     app = App()
     app.update()
     try:
-        # 固定一个偏大的录制尺寸，让演示区域更清晰、覆盖屏幕左侧
-        app.geometry("1100x700+0+0")
+        app.geometry("1180x700+0+0")
         app.update()
-        # 录制期间强制置顶，避免被屏幕上其它窗口遮挡
         app.attributes("-topmost", True)
         app.lift()
         app.focus_force()
@@ -201,9 +266,12 @@ def run(out_dir, frames_per_scene, out_size):
             (top or app).attributes("-topmost", True)
         except Exception:
             pass
-        app.update_idletasks()
-        app.update()
-        time.sleep(0.12)
+        # 多轮 update：确保 canvas/网格完成布局（否则首页磁贴画不出来）
+        for _ in range(6):
+            app.update_idletasks()
+            app.update()
+            time.sleep(0.02)
+        time.sleep(0.08)
         p = grab_frame(app, out_dir, f"{step:03d}_{name}.png", out_size,
                        bbox_override=bbox)
         step += 1
@@ -217,152 +285,75 @@ def run(out_dir, frames_per_scene, out_size):
         except Exception:
             pass
 
-    # 临时归类：给几个真实桌面项归到分类，让分类页/统计页有层次。
-    # 录完在 finally 里恢复原状，不污染用户配置。
-    demo_assignments = []
-
-    def demo_assign():
-        """扫描桌面项，挑前几项临时归到「工具/办公/娱乐」，返回可恢复清单。"""
-        try:
-            from core.scanner import scan_desktop
-            items = scan_desktop()
-            # 按分类轮转分配：第 i 个未归类项归到第 i%3 个分类，避免重复
-            cats = ["工具", "办公", "娱乐"]
-            per_cat = 3
-            counts = {c: 0 for c in cats}
-            for it in items:
-                if app.config_mgr.get_category(it.path, it.name):
-                    continue   # 已有归类，跳过
-                cat = cats[len(demo_assignments) % len(cats)]
-                if counts[cat] >= per_cat:
-                    continue
-                app.config_mgr.assign(it.path, cat)
-                demo_assignments.append((it.path, cat))
-                counts[cat] += 1
-                if all(v >= per_cat for v in counts.values()):
-                    break
-            return len(demo_assignments)
-        except Exception:
-            return 0
-
-    def demo_unassign():
-        for p, cat in demo_assignments:
-            try:
-                app.config_mgr.unassign(p)
-            except Exception:
-                pass
+    # 预置演示数据，拿到清理函数
+    cleanup = setup_demo_data(app)
 
     try:
-        # 0. 提前呼出桌宠，全程陪伴
+        # 0. 呼出桌宠全程陪伴
         if not app.pet_active():
             app._toggle_pet()
             app.update()
             time.sleep(0.4)
 
-        # 1. 首页磁贴（桌宠已在旁陪伴）
+        # 1. 首页磁贴（8 分类 + 已归类项目，桌宠陪伴）
         app._show_page("home", force=True)
         reset_search()
         for _ in range(frames_per_scene):
             _position_pet_near_main(app)
             snap("home")
 
-        # 2. 全局搜索
+        # 2. 右键「移入分类」：选一个未归类项，弹移入菜单
+        app._show_page("home", force=True)
+        reset_search()
+        # 找一个未归类项演示右键移入（若全归类了则演示移出再移入）
+        unassigned = [i for i in app._pages["home"].items if not i.category]
+        if not unassigned:
+            # 全归类了：临时把最后一个项移出，再演示移入
+            last = app._pages["home"].items[-1]
+            app.config_mgr.unassign(last.path)
+            app._show_page("home", force=True)
+            unassigned = [i for i in app._pages["home"].items if not i.category]
+        if unassigned:
+            target = unassigned[0]
+            # 触发右键菜单：直接把该项归到「文档」分类，展示归类动作
+            app.config_mgr.assign(target.path, "文档")
+            app._show_page("home", force=True)
+            for _ in range(frames_per_scene):
+                _position_pet_near_main(app)
+                snap("move_in")
+
+        # 3. 全局搜索（输入过滤）
         app._show_page("home", force=True)
         app.search_var.set("")
         app.update()
         _position_pet_near_main(app)
         snap("search_0")
-        app.search_var.set("墨")
+        app.search_var.set("文档")
         app.update()
         for _ in range(frames_per_scene):
             _position_pet_near_main(app)
             snap("search")
         reset_search()
 
-        # 3. 分类体系（先临时归类，让分类页有内容）
-        demo_assign()
-        app._show_page("categories", force=True)
+        # 4. 打开分类窗口
+        app._show_page("home", force=True)
         reset_search()
-        for _ in range(frames_per_scene):
-            _position_pet_near_main(app)
-            snap("categories")
+        try:
+            app._pages["home"]._open_category("文档")
+            app.update()
+            time.sleep(0.3)
+            for _ in range(frames_per_scene):
+                _position_pet_near_main(app)
+                snap("open_category")
+        except Exception:
+            pass
 
-        # 4. 时间管理
+        # 5. 时间管理：启动番茄钟
         app._show_page("countdowns", force=True)
         reset_search()
         for _ in range(frames_per_scene):
             _position_pet_near_main(app)
             snap("countdowns")
-
-        # 5. 数据统计
-        app._show_page("stats", force=True)
-        reset_search()
-        for _ in range(frames_per_scene):
-            _position_pet_near_main(app)
-            snap("stats")
-
-        # 6. 设置页（顶部外观区；AI 助手入口由独立的对话窗口场景展示）
-        app._show_page("settings", force=True)
-        reset_search()
-        for _ in range(frames_per_scene):
-            _position_pet_near_main(app)
-            snap("settings")
-
-        # 7. AI 助手对话窗口（预置一轮演示问答，展示气泡 / 输入框 / 发送按钮）
-        _ai_dlg = None
-        try:
-            from gui.pages import AIChatDialog
-            _ai_dlg = AIChatDialog(app, app)
-            _ai_dlg.lift()
-            _ai_dlg.attributes("-topmost", True)
-            _ai_dlg.update_idletasks()
-            _ai_dlg.update()
-            time.sleep(0.3)
-            # 预置一条用户提问 + 一条墨墨回复，展示「左灰右蓝」气泡
-            _ai_dlg._bubble("帮我安排一下今天的待办事项", "me")
-            _ai_dlg._bubble("好的～你可以到「时间管理」里新建计划，"
-                            "记得顺手定个番茄钟，我们一起专注！", "momo")
-            _ai_dlg.update()
-            # 用 PrintWindow 直接抓 AI 窗口内容（不受屏幕遮挡/坐标影响）
-            for _ in range(frames_per_scene):
-                try:
-                    _ai_dlg.lift()
-                    _ai_dlg.attributes("-topmost", True)
-                except Exception:
-                    pass
-                _ai_dlg.update_idletasks()
-                _ai_dlg.update()
-                time.sleep(0.12)
-                _img, _l, _t = capture_window(_ai_dlg.winfo_id())
-                if _img is None:
-                    continue
-                from PIL import Image
-                if out_size:
-                    _img = _img.resize(out_size, Image.LANCZOS).convert("RGB")
-                else:
-                    _img = _img.convert("RGB")
-                _p = os.path.join(out_dir, f"{step:03d}_ai_chat.png")
-                _img.save(_p)
-                frames.append(("ai_chat", _p))
-                step += 1
-            _ai_dlg.destroy()
-        except Exception:
-            pass
-
-        # 8. 呼出桌宠（收起再重新呼出，突出「一键召唤」）
-        if app.pet_active():
-            app._toggle_pet()
-            app.update()
-            time.sleep(0.3)
-        app._toggle_pet()
-        app.update()
-        time.sleep(0.4)
-        for _ in range(frames_per_scene):
-            _position_pet_near_main(app)
-            snap("pet")
-
-        # 9. 番茄钟（桌宠伴学状态）
-        app._show_page("countdowns", force=True)
         app.start_pomodoro(1, 1)
         app.update()
         time.sleep(0.4)
@@ -371,9 +362,30 @@ def run(out_dir, frames_per_scene, out_size):
             snap("pomodoro")
         app.stop_pomodoro()
 
+        # 6. 摸头桌宠（show_happy：眯眼笑 + 气泡；每帧重新触发，表情
+        #    默认只持续 0.9s，不重触发会闪一下就恢复成待机脸）
+        app._show_page("home", force=True)
+        reset_search()
+        pet = getattr(app, "_pet", None)
+        for _ in range(frames_per_scene):
+            if pet is not None:
+                try:
+                    pet.show_happy()
+                except Exception:
+                    pass
+            app.update()
+            _position_pet_near_main(app)
+            snap("pat_pet")
+
+        # 7. 数据统计（数字已随归类/番茄钟变化）
+        app._show_page("stats", force=True)
+        reset_search()
+        for _ in range(frames_per_scene):
+            _position_pet_near_main(app)
+            snap("stats")
+
     finally:
-        # 恢复临时归类，收起桌宠
-        demo_unassign()
+        cleanup()
         try:
             if app.pet_active():
                 app._toggle_pet()
@@ -387,35 +399,59 @@ def run(out_dir, frames_per_scene, out_size):
     return frames
 
 
-def make_gif(frames, out_path, fps=10, colors=256):
+def make_mp4(frames, out_path, fps=12):
+    """把录制帧合成为 MP4（H.264），画质与体积都优于 GIF。"""
+    import imageio
+    import numpy as np
+
+    imgs = []
+    for _, p in frames:
+        from PIL import Image
+        im = Image.open(p).convert("RGB")
+        imgs.append(np.asarray(im))
+    if not imgs:
+        return None
+    writer = imageio.get_writer(out_path, fps=fps, codec="libx264",
+                                quality=8, macro_block_size=None)
+    try:
+        for arr in imgs:
+            writer.append_data(arr)
+    finally:
+        writer.close()
+    return out_path
+
+
+def make_gif(frames, out_path, fps=12, colors=256):
+    """GIF 降级备用（256 色量化会有轻微色带，优先用 MP4）。"""
     from PIL import Image
-    # 转 P 模式（自适应调色板）再保存，能显著压缩 GIF 体积；
-    # 桌面扁平 UI 用 256 色即可，必要时可降 colors 进一步压体积。
     imgs = [Image.open(p).convert("P", palette=Image.ADAPTIVE,
                                   colors=colors) for _, p in frames]
     imgs = [im for im in imgs if im is not None]
     if not imgs:
         return None
-    imgs[0].save(
-        out_path, save_all=True, append_images=imgs[1:],
-        duration=int(1000 / fps), loop=0, optimize=True,
-    )
+    imgs[0].save(out_path, save_all=True, append_images=imgs[1:],
+                 duration=int(1000 / fps), loop=0, optimize=True)
     return out_path
 
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--frames", type=int, default=6, help="每个场景抓帧数（默认 6）")
-    ap.add_argument("--width", type=int, default=960, help="输出宽度（默认 960）")
-    ap.add_argument("--height", type=int, default=600, help="输出高度（默认 600）")
-    ap.add_argument("--fps", type=int, default=12, help="GIF 帧率（默认 12）")
-    ap.add_argument("--out", default=None, help="输出 GIF 路径")
-    ap.add_argument("--list", action="store_true", help="只打印场景清单")
+    ap.add_argument("--frames", type=int, default=8, help="每个场景抓帧数（默认 8）")
+    ap.add_argument("--width", type=int, default=1180, help="输出宽度（默认 1180）")
+    ap.add_argument("--height", type=int, default=700, help="输出高度（默认 700）")
+    ap.add_argument("--fps", type=int, default=12, help="帧率（默认 12）")
+    ap.add_argument("--mp4-only", action="store_true", help="只输出 MP4，不生成 GIF")
+    ap.add_argument("--out", default=None, help="输出基础路径（不含扩展名）")
+    ap.add_argument("--list", action="store_true", help="只打印操作链清单")
     args = ap.parse_args()
 
     if args.list:
-        for key, label in SCENES:
-            print(f"{key:12s} {label}")
+        for key, label in (
+                ("home", "首页磁贴"), ("move_in", "右键移入分类"),
+                ("search", "全局搜索"), ("open_category", "打开分类"),
+                ("countdowns", "时间管理"), ("pomodoro", "启动番茄钟"),
+                ("pat_pet", "摸头桌宠"), ("stats", "数据统计")):
+            print(f"{key:16s} {label}")
         return
 
     try:
@@ -426,7 +462,7 @@ def main():
 
     import tempfile
     tmp = tempfile.mkdtemp(prefix="momo_demo_")
-    out = args.out or os.path.join(_ROOT, "assets", "demo.gif")
+    base = args.out or os.path.join(_ROOT, "assets", "demo")
     out_size = (args.width, args.height)
 
     frames = run(tmp, args.frames, out_size)
@@ -434,8 +470,16 @@ def main():
         print("未捕获到任何帧")
         return
 
-    gif = make_gif(frames, out, fps=args.fps)
-    print(f"共 {len(frames)} 帧 @ {args.fps} fps ≈ {len(frames) / args.fps:.1f} 秒，输出：{gif}")
+    mp4 = make_mp4(frames, base + ".mp4", fps=args.fps)
+    sz = os.path.getsize(mp4) if mp4 and os.path.isfile(mp4) else 0
+    print(f"共 {len(frames)} 帧 @ {args.fps} fps ≈ {len(frames)/args.fps:.1f} 秒")
+    print(f"MP4：{mp4}（{sz/1024/1024:.1f} MB）")
+
+    if not args.mp4_only:
+        gif = make_gif(frames, base + ".gif", fps=args.fps)
+        gsz = os.path.getsize(gif) if gif and os.path.isfile(gif) else 0
+        print(f"GIF（降级备用）：{gif}（{gsz/1024/1024:.1f} MB）")
+
     print("临时帧目录：", tmp)
 
 

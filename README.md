@@ -52,9 +52,9 @@ Windows 桌面的整理方式，二十年来几乎没有变化：图标只能靠
 
 ## 功能演示
 
-![MoMo Demo](assets/demo.gif)
+<video src="assets/demo.mp4" controls width="100%"></video>
 
-*磁贴桌面 → 全局搜索 → 分类 → 时间管理 → 统计 → 呼出桌宠 → 番茄钟伴学（全流程演示）*
+*首页磁贴 → 右键移入分类 → 全局搜索 → 打开分类 → 时间管理 → 番茄钟 → 摸头桌宠 → 数据统计（完整操作链，约 12 秒）*
 
 ### 界面截图
 
@@ -460,9 +460,9 @@ Under the hood, the project holds a deliberately strict constraint: **zero third
 
 ## Demo
 
-![MoMo Demo](assets/demo.gif)
+<video src="assets/demo.mp4" controls width="100%"></video>
 
-*Tile board → global search → categories → time management → stats → desktop pet → pomodoro (full flow)*
+*Tile board → right-click categorize → global search → open category → time management → pomodoro → pat the pet → stats (full flow, ~12s)*
 
 | Tile board (light) | Tile board (dark) |
 | :---: | :---: |
