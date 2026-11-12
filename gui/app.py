@@ -1017,6 +1017,7 @@ class App(tk.Tk):
             on_start()
         threading.Thread(target=_worker, daemon=True).start()
 
+    def _update_pomo_label(self):
         """顶栏右侧的番茄钟状态：任何页面都看得见剩余时间。"""
         lab = getattr(self, "_pomo_label", None)
         if lab is None:

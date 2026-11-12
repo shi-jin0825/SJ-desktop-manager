@@ -52,20 +52,9 @@ Windows 桌面的整理方式，二十年来几乎没有变化：图标只能靠
 
 ## 功能演示
 
-> **📌 动图占位 · 请在此插入运行录屏**
->
-> 1. 录制 10–15 秒的核心流程：**磁贴归类 → 全局搜索 → 呼出桌宠 → 启动番茄钟**；
-> 2. 导出为 `assets/demo.gif`（建议 1280×800、15 fps、体积 ≤ 8 MB）；
-> 3. 删除下面这一行的注释符号即可显示：
->
-> ```markdown
-> <!-- ![MoMo Demo](assets/demo.gif) -->
-> ```
->
-> 亦可使用 GitHub 原生视频：将录屏拖入 Issue 编辑框取得 `https://user-images.githubusercontent.com/...` 链接后，替换为 `<video src="..." controls></video>`。
+![MoMo Demo](assets/demo.gif)
 
-<!-- 动图占位：录制完成后删除本注释与下一行注释，GIF 将显示在 README 顶部 -->
-<!-- ![MoMo Demo](assets/demo.gif) -->
+*磁贴桌面 → 全局搜索 → 分类 → 时间管理 → 统计 → 呼出桌宠 → 番茄钟伴学（全流程演示）*
 
 ### 界面截图
 
@@ -961,11 +950,9 @@ Under the hood, the project holds a deliberately strict constraint: **zero third
 
 ## Demo
 
-> **📌 GIF placeholder** — record 10–15 seconds (tile sorting → global search → pet → pomodoro), export as `assets/demo.gif`, then uncomment the line below.
->
-> ```markdown
-> <!-- ![MoMo Demo](assets/demo.gif) -->
-> ```
+![MoMo Demo](assets/demo.gif)
+
+*Tile board → global search → categories → time management → stats → desktop pet → pomodoro (full flow)*
 
 | Tile board (light) | Tile board (dark) |
 | :---: | :---: |
